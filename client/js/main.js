@@ -14,7 +14,8 @@ import {
   PARACHUTE_CONFIG,
   PLAYER_EYE_HEIGHT,
   PLAYER_CROUCH_EYE_HEIGHT,
-  PLAYER_SLIDE_EYE_HEIGHT
+  PLAYER_SLIDE_EYE_HEIGHT,
+  SWIM_CONFIG
 } from '/shared/mapData.js';
 import { SoundEngine } from './audio.js';
 import { VoxelWorld } from './world.js';
@@ -48,10 +49,86 @@ let currentMap = world.buildFromSeed(DEFAULT_MAP_SEED);
 
 const localPlayer = new LocalPlayerController(scene, camera, renderer.domElement, audio);
 
+// Prepara la GPU antes de que algo se vea, para que no se congele el juego la primera vez que se
+// dibuja algo (al saltar del avión se congelaba ~0.8-1 s y al abrir el paracaídas ~0.2 s):
+//  1) warmUpGpu(): compila los shaders de todos los objetos, también de los ocultos (paracaídas,
+//     armas en primera persona). renderer.compile no sube geometría y tarda ~0.1-0.3 s.
+//  2) queueMapWarmUp(): las geometrías del mapa (terreno, estructuras, vegetación), el botín y la
+//     fauna, que desde la cabina del avión no se ven (o están ocultos por distancia), se suben a la
+//     GPU de a pocas por fotograma: en cada fotograma unas cuantas piezas se dibujan aunque estén
+//     fuera de cámara o lejos (quedan recortadas, no se ven). El ritmo se adapta al tiempo de cada
+//     fotograma; en el avión suele terminar en ~1-2 s, en vez de un congelón al saltar.
+// Ritmo adaptativo: si el fotograma va holgado se suben más piezas, si va justo menos
+const WARM_MIN_PER_FRAME = 6;
+const WARM_MAX_PER_FRAME = 48;
+const WARM_TARGET_FRAME_MS = 14;
+let warmPerFrame = 12;
+let warmQueue = [];
+const warmBatch = [];
+const warmForcedVisible = [];
+
+function warmUpGpu() {
+  for (const [s, cam] of [[scene, camera], [localPlayer.fpRig?.scene, localPlayer.fpRig?.camera]]) {
+    if (s && cam) renderer.compile(s, cam);
+  }
+}
+
+const isDrawable = (o) => o.isMesh || o.isLine || o.isPoints || o.isSprite;
+
+function queueMapWarmUp() {
+  warmQueue = [];
+  // Primero (al final de la cola) botín y fauna: son lo que aparece de golpe cerca del aterrizaje
+  for (const group of [world.lootGroup, world.wildlifeGroup]) {
+    group.traverse((o) => {
+      if (isDrawable(o) && o.visible) warmQueue.push(o);
+    });
+  }
+  for (const group of [world.terrainGroup, world.structuresGroup, world.foliageGroup]) {
+    group.traverseVisible((o) => {
+      if (isDrawable(o) && o.frustumCulled) warmQueue.push(o);
+    });
+  }
+}
+
+function beginWarmBatch() {
+  warmBatch.length = 0;
+  warmForcedVisible.length = 0;
+  // warmBatch guarda pares [objeto, frustumCulled previo]
+  while (warmBatch.length < warmPerFrame * 2 && warmQueue.length > 0) {
+    const o = warmQueue.pop();
+    if (!o.parent) continue; // ya no está en la escena
+    // Dibujarlo este fotograma aunque esté oculto por distancia (p. ej. botín lejano)
+    for (let a = o.parent; a && !a.isScene; a = a.parent) {
+      if (!a.visible) {
+        a.visible = true;
+        warmForcedVisible.push(a);
+      }
+    }
+    warmBatch.push(o, o.frustumCulled);
+    o.frustumCulled = false;
+  }
+}
+
+function adaptWarmRate(frameMs) {
+  if (frameMs < WARM_TARGET_FRAME_MS * 0.75) warmPerFrame = Math.min(WARM_MAX_PER_FRAME, Math.ceil(warmPerFrame * 1.4));
+  else if (frameMs > WARM_TARGET_FRAME_MS) warmPerFrame = Math.max(WARM_MIN_PER_FRAME, Math.floor(warmPerFrame * 0.7));
+}
+
+function endWarmBatch() {
+  for (let i = 0; i < warmBatch.length; i += 2) warmBatch[i].frustumCulled = warmBatch[i + 1];
+  for (let i = 0; i < warmForcedVisible.length; i++) warmForcedVisible[i].visible = false;
+  warmBatch.length = 0;
+  warmForcedVisible.length = 0;
+}
+
 // Modo depuración (?debug en la URL): expone objetos internos para medir rendimiento desde la consola.
 if (new URLSearchParams(window.location.search).has('debug')) {
   window.__cocoro = { THREE, renderer, scene, camera, world, localPlayer };
 }
+
+// Preparar la GPU con el mapa del lobby (los materiales y variantes de shader se reutilizan en la partida)
+warmUpGpu();
+queueMapWarmUp();
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -107,6 +184,9 @@ const ui = {
 
   hpFill: document.getElementById('hp-fill'),
   hpText: document.getElementById('hp-text'),
+  breathBar: document.getElementById('breath-bar'),
+  breathFill: document.getElementById('breath-fill'),
+  drownWarning: document.getElementById('drown-warning'),
   medkitCount: document.getElementById('medkit-count'),
   bandageCount: document.getElementById('bandage-count'),
   stealthBadge: document.getElementById('stealth-badge'),
@@ -368,6 +448,8 @@ function addKillfeedItem(killer, victim, reason) {
     div.textContent = `🐆 Un Jaguar Colombiano cazó a ${victim}`;
   } else if (reason === 'fall') {
     div.textContent = `⛰️ ${victim} cayó desde gran altura`;
+  } else if (reason === 'drown') {
+    div.textContent = `🌊 ${victim} se ahogó en el río Quindío`;
   } else {
     div.textContent = `🎯 ${killer} eliminó a ${victim}`;
   }
@@ -409,6 +491,17 @@ function updateHUD() {
       ? 'linear-gradient(90deg, #d97706, #f59e0b)'
       : 'linear-gradient(90deg, #b91c1c, #ef4444)';
   ui.hpText.textContent = `${Math.ceil(localPlayer.hp)}/100`;
+
+  // Aliento: visible nadando o mientras se recupera; aviso al ahogarse
+  const breath = Math.max(0, Math.min(SWIM_CONFIG.maxBreath, localPlayer.breath ?? SWIM_CONFIG.maxBreath));
+  const showBreath = localPlayer.alive && (localPlayer.isSwimming || breath < SWIM_CONFIG.maxBreath);
+  ui.breathBar?.classList.toggle('hidden', !showBreath);
+  if (showBreath && ui.breathFill) {
+    ui.breathFill.style.width = `${(breath / SWIM_CONFIG.maxBreath) * 100}%`;
+    ui.breathFill.classList.toggle('low', breath < 30);
+  }
+  const drowning = localPlayer.alive && localPlayer.isSwimming && breath <= 0;
+  ui.drownWarning?.classList.toggle('hidden', !drowning);
   ui.medkitCount.textContent = String(localPlayer.medkits);
   if (ui.bandageCount) ui.bandageCount.textContent = String(localPlayer.bandages);
   ui.killsCount.textContent = String(localPlayer.kills);
@@ -656,6 +749,9 @@ const net = new NetworkManager(scene, {
     localPlayer.alive = true;
     localPlayer.state = 'plane';
     localPlayer.hp = 100;
+    localPlayer.breath = SWIM_CONFIG.maxBreath;
+    localPlayer.isSwimming = false;
+    localPlayer.lastDrownHp = 100;
     localPlayer.kills = 0;
     localPlayer.weapons = {
       fists: { unlocked: true, mag: 0 },
@@ -685,6 +781,8 @@ const net = new NetworkManager(scene, {
     ui.hudScreen.classList.remove('hidden');
     ui.killfeed.innerHTML = '';
     renderer.domElement.requestPointerLock?.();
+    warmUpGpu();
+    queueMapWarmUp();
   },
 
   onJoinedMidgame(data) {
@@ -708,6 +806,8 @@ const net = new NetworkManager(scene, {
     ui.lobbyScreen.classList.add('hidden');
     ui.hudScreen.classList.remove('hidden');
     showToast('Partida en curso: modo espectador hasta la siguiente ronda');
+    warmUpGpu();
+    queueMapWarmUp();
   },
 
   onWorldTick(snapshot) {
@@ -725,6 +825,12 @@ const net = new NetworkManager(scene, {
       localPlayer.medkits = me.medkits;
       localPlayer.bandages = me.bandages ?? localPlayer.bandages;
       localPlayer.reserveAmmo = me.reserveAmmo;
+      // Aliento autoritativo del servidor; sonido de burbujas mientras se ahoga
+      if (typeof me.breath === 'number') {
+        if (me.breath <= 0 && localPlayer.isSwimming && me.hp < localPlayer.lastDrownHp) audio.playDrowning?.();
+        localPlayer.lastDrownHp = me.hp;
+        localPlayer.breath = me.breath;
+      }
       if (me.unlockedWeapons) {
         localPlayer.weapons.pistol.unlocked = Boolean(me.unlockedWeapons.pistol);
         localPlayer.weapons.shotgun.unlocked = Boolean(me.unlockedWeapons.shotgun);
@@ -1069,7 +1175,12 @@ function renderFrame() {
   }
 
   world.updateRenderBudget(localPlayer, camera, dt);
+  const warming = warmQueue.length > 0;
+  if (warming) beginWarmBatch();
+  const renderStart = warming ? performance.now() : 0;
   renderer.render(scene, camera);
+  if (warming) adaptWarmRate(performance.now() - renderStart);
+  endWarmBatch();
   localPlayer.renderViewmodel(renderer);
 }
 

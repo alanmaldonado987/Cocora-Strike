@@ -17,7 +17,8 @@ import {
   HEAL_CONFIG,
   computeFallDamage,
   computeTargetDescentSpeed,
-  resolveSlidingHorizontal
+  resolveSlidingHorizontal,
+  isSwimmingAt
 } from '../../shared/mapData.js';
 import { consumeMoveBudget } from '../validation.js';
 
@@ -181,7 +182,20 @@ export const playerActionsMethods = {
         }
       } else if (p.state === 'ground') {
         const clientAirborne = data.onGround === false || !nearFloor;
-        if (clientAirborne && !nearFloor) {
+        const swimming = isSwimmingAt(this.map, p.x, p.y, p.z);
+        p.isSwimming = swimming;
+        if (swimming) {
+          // Caer al agua amortigua el golpe; nadando se está "apoyado" (sin acumular altura de caída)
+          if (!p.onGround) {
+            const fallDmg = computeFallDamage((p.fallPeakY - WATER_LEVEL) * 0.4);
+            if (fallDmg > 0) this.damagePlayer(p, fallDmg, null, 'fall', false);
+          }
+          if (p.healingUntil > 0) this.cancelHealForPlayer(p);
+          p.isSliding = false;
+          p.isCrouching = false;
+          p.onGround = true;
+          p.fallPeakY = p.y;
+        } else if (clientAirborne && !nearFloor) {
           p.fallPeakY = p.onGround ? p.y : Math.max(p.fallPeakY, p.y);
           p.onGround = false;
         } else {
@@ -243,6 +257,7 @@ export const playerActionsMethods = {
   handleHeal(socketId, preferredItem = 'medkit') {
     const p = this.players.get(socketId);
     if (!p || !p.alive || p.state !== 'ground' || p.hp >= p.maxHp) return;
+    if (p.isSwimming) return; // no se puede vendar nadando
     const now = Date.now();
     if (p.healingUntil > now) return;
 

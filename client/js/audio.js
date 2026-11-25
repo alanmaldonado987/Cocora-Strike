@@ -254,6 +254,27 @@ export class SoundEngine {
     }
   }
 
+  // Chapuzón al entrar al río
+  playSplash(strength = 1) {
+    if (!this.ctx || this.muted) return;
+    const s = Math.max(0.4, Math.min(1.4, strength));
+    this.playFilteredNoise(0.42, 2400, 260, 0.34 * s);
+    this._playPunchOsc('sine', 180, 60, 0.18, 0.16 * s);
+  }
+
+  // Brazada nadando
+  playSwimStroke() {
+    if (!this.ctx || this.muted) return;
+    this.playFilteredNoise(0.26, 1500, 520, 0.14);
+  }
+
+  // Burbujas y golpe sordo al ahogarse
+  playDrowning() {
+    if (!this.ctx || this.muted) return;
+    this._playPunchOsc('sine', 420, 140, 0.16, 0.12);
+    this.playFilteredNoise(0.2, 700, 220, 0.16);
+  }
+
   playVault() {
     if (!this.ctx || this.muted) return;
     this.playFilteredNoise(0.16, 950, 420, 0.24);

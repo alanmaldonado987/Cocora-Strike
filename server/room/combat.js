@@ -15,6 +15,7 @@ export const combatMethods = {
     if (this.phase !== 'playing') return;
     const shooter = this.players.get(socketId);
     if (!shooter || !shooter.alive || shooter.state !== 'ground') return;
+    if (shooter.isSwimming) return; // nadando el arma va guardada
     if (!payload || !payload.origin || !payload.dir) return;
 
     if (shooter.healingUntil > 0) {
@@ -309,6 +310,7 @@ export const combatMethods = {
       if (sourceName === 'bear') killerLabel = 'Oso de Anteojos';
       else if (sourceName === 'jaguar') killerLabel = 'Jaguar Colombiano';
       else if (sourceName === 'fall') killerLabel = 'Caída de Altura';
+      else if (sourceName === 'drown') killerLabel = 'El Río Quindío';
 
       this.io.emit('player_eliminated', {
         victimId: victim.id,

@@ -23,6 +23,7 @@ import {
 } from '/shared/mapData.js';
 import { createDetailedWeaponMesh, getSharedToonGradient } from './player.js';
 import { ServerClock, SnapshotBuffer, createSampleOut } from './interpolation.js';
+import { GroundCover } from './groundCover.js';
 
 const _wildSample = createSampleOut();
 
@@ -46,6 +47,7 @@ const FOLIAGE_BOUNDS_PADDING = 3.0; // margen por el balanceo del viento en GPU
 // Luces puntuales: número FIJO en la escena (evita recompilar shaders cuando una luz
 // aparece/desaparece) y solo se encienden las que pueden iluminar algo visible.
 const MAX_ACTIVE_POINT_LIGHTS = 6;
+const LOOT_VISIBLE_DISTANCE = 150; // metros
 const POINT_LIGHT_FADE_RATE = 6.0; // fundido de ~0.17 s al cambiar de luz
 
 // Sol: desplazamiento fijo respecto al jugador y ajuste a la rejilla de texels del mapa de sombras
@@ -208,11 +210,16 @@ function createRiverFlowTexture() {
   return tex;
 }
 
-function createWindFoliageMaterial(windUniform, swayAmp = 0.035) {
+// rimOutline: oscurece las superficies vistas de canto (contorno cel-shaded). Las flores lo
+// desactivan para que los pétalos conserven su color vivo.
+function createWindFoliageMaterial(windUniform, swayAmp = 0.035, side = THREE.FrontSide, rimOutline = true) {
   const mat = new THREE.MeshToonMaterial({
     vertexColors: true,
-    gradientMap: getSharedToonGradient()
+    gradientMap: getSharedToonGradient(),
+    side
   });
+  // El caché de shaders de three usa el texto de onBeforeCompile: distinguir la variante sin contorno
+  mat.customProgramCacheKey = () => (rimOutline ? 'wind-foliage-rim' : 'wind-foliage-flat');
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uWindTime = windUniform;
     shader.uniforms.uSwayAmp = { value: swayAmp };
@@ -233,6 +240,7 @@ function createWindFoliageMaterial(windUniform, swayAmp = 0.035) {
         transformed.z += gust * 0.65;
         `
       );
+    if (!rimOutline) return;
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <opaque_fragment>',
       `
@@ -905,6 +913,13 @@ export class VoxelWorld {
     this.sharedMaterials.add(this.sharedInstancedMat);
     this.sharedMaterials.add(this.foamInstancedMat);
 
+    // Pasto denso y flores alrededor del jugador (hojas finas: se ven por ambas caras)
+    this.groundCover = new GroundCover(
+      this.scene,
+      createWindFoliageMaterial(this.windUniform, 0.09, THREE.DoubleSide),
+      createWindFoliageMaterial(this.windUniform, 0.12, THREE.DoubleSide, false)
+    );
+
     this.lootMeshes = new Map();
     this.lootItemsData = new Map();
     this.wildlifeEntries = new Map();
@@ -1019,6 +1034,9 @@ export class VoxelWorld {
       this.sunLight.target.position.copy(_sunSnapped);
       this.sunLight.position.copy(_sunSnapped).add(SUN_OFFSET);
     }
+
+    // Pasto y flores: generar/mostrar los bloques cercanos al jugador
+    if (viewerPos && this.groundCover) this.groundCover.update(viewerPos);
 
     if (!camera) return;
 
@@ -1312,6 +1330,7 @@ export class VoxelWorld {
     }
 
     this.mapData = generateCocoraMap(seed);
+    this.groundCover.reset(this.mapData, seed);
     this.buildOrganicTerrainAndRiver(this.mapData);
     this.buildRealisticStructuresAndPOIs(this.mapData);
     this.buildInstancedEnvironment(this.mapData);
@@ -3298,7 +3317,16 @@ export class VoxelWorld {
 
     this.updateStormAtmosphere(dt, timeSec, stormState, viewerPos);
 
+    // Botín: cada objeto son ~10 piezas; más allá de LOOT_VISIBLE_DISTANCE mide pocos píxeles,
+    // así que no se dibuja (antes el botín de todo el mapa sumaba ~2000 llamadas de dibujo).
+    const lootMaxD2 = LOOT_VISIBLE_DISTANCE * LOOT_VISIBLE_DISTANCE;
     for (const obj of this.lootMeshes.values()) {
+      if (viewerPos) {
+        const dx = obj.position.x - viewerPos.x;
+        const dz = obj.position.z - viewerPos.z;
+        obj.visible = dx * dx + dz * dz < lootMaxD2;
+        if (!obj.visible) continue;
+      }
       const mats = obj.userData.highlightMats;
       const pulse = 0.20 + Math.sin(timeSec * 3.6 + obj.userData.phase) * 0.10;
       if (mats && mats.length > 0) {

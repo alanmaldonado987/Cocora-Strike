@@ -3,10 +3,34 @@
 
 import {
   WORLD_HALF,
+  WATER_LEVEL,
+  SWIM_CONFIG,
   PLAYER_RADIUS,
   PLAYER_HEIGHT,
   PLAYER_CROUCH_HEIGHT
 } from './config.js';
+
+// ==================== AGUA: PROFUNDIDAD Y NADO ====================
+
+// Profundidad del río en (x, z): distancia de la superficie al lecho (0 fuera del agua).
+// Se mide bajo la superficie, así que un puente encima no cuenta como fondo.
+export function getWaterDepthAt(map, x, z) {
+  if (!map.isInWater(x, WATER_LEVEL, z)) return 0;
+  const bed = map.getFloorBelowY(x, WATER_LEVEL, z);
+  return Math.max(0, WATER_LEVEL - bed);
+}
+
+// ¿Está nadando una entidad con los pies en y? Hace falta agua profunda y estar dentro de ella
+// (no de pie sobre un puente ni todavía cayendo desde arriba).
+export function isSwimmingAt(map, x, y, z) {
+  return y <= WATER_LEVEL - 0.5 && getWaterDepthAt(map, x, z) >= SWIM_CONFIG.swimDepth;
+}
+
+// Altura de los pies al flotar nadando (nunca por debajo del lecho)
+export function getSwimFloatY(map, x, z) {
+  const bed = map.getFloorBelowY(x, WATER_LEVEL, z);
+  return Math.max(bed, WATER_LEVEL - SWIM_CONFIG.floatDepth);
+}
 
 // ==================== COLISIÓN DESLIZANTE Y RAYCAST ANALÍTICO 3D ====================
 

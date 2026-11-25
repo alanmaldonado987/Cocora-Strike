@@ -13,6 +13,9 @@ import {
   WORLD_SIZE,
   WORLD_HALF,
   WATER_LEVEL,
+  RIVER_CENTER_DEPTH,
+  RIVER_EDGE_DEPTH,
+  RIVER_FORD_DEPTH,
   DEFAULT_MAP_SEED,
   SURFACE,
   BLOCK
@@ -197,8 +200,11 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
       if (distRiver < 19.5) {
         if (distRiver < 8.8) {
           const centerProfile = smoothstep(1 - distRiver / 8.8);
-          const bedDepth = fordFactor > 0.2 ? 2.45 : 0.65 + (1 - centerProfile) * 1.35;
-          h = bedDepth;
+          // Lecho relativo a la superficie: misma profundidad aunque cambie WATER_LEVEL
+          const depth = fordFactor > 0.2
+            ? RIVER_FORD_DEPTH
+            : RIVER_CENTER_DEPTH - (1 - centerProfile) * (RIVER_CENTER_DEPTH - RIVER_EDGE_DEPTH);
+          h = WATER_LEVEL - depth;
           surf = SURFACE.RIVER_BED;
         } else {
           const bankT = smoothstep((distRiver - 8.8) / 10.7);

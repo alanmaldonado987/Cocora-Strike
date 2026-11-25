@@ -16,7 +16,7 @@ import {
 
 // Huella del mapa por defecto. Si cambia, el cliente y el servidor podrían
 // dejar de generar el mismo mundo: actualizarla solo si el cambio es intencional.
-const DEFAULT_MAP_FINGERPRINT = '88928a20bd1fcd9ee0c560e6b67cb694c8f373605817f4564de0300cb9e9933d';
+const DEFAULT_MAP_FINGERPRINT = '8532a58acb707cc5de21001cc9ad7e28bf2fa55495166908c5d0d57a420413b6';
 
 function fingerprint(map) {
   const h = createHash('sha256');

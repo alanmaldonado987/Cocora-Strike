@@ -6,6 +6,7 @@ import {
   DEFAULT_MAP_SEED,
   BOT_DIFFICULTIES,
   PARACHUTE_CONFIG,
+  SWIM_CONFIG,
   generateCocoraMap,
   createRNG
 } from '../../shared/mapData.js';
@@ -241,6 +242,9 @@ export const lobbyMethods = {
       p.fallPeakY = this.plane.y;
       p.lastAlertedById = null;
       p.alertedUntil = 0;
+      p.breath = SWIM_CONFIG.maxBreath;
+      p.isSwimming = false;
+      p.drownDamageAccum = 0;
       p.equipped = 'fists';
       p.weapons = this.createFreshWeaponsMap();
       p.reserveAmmo = 24;

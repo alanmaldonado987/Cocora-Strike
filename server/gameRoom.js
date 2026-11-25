@@ -13,6 +13,7 @@ import {
   LOOT_TYPES,
   STORM_PHASES,
   PARACHUTE_CONFIG,
+  SWIM_CONFIG,
   generateCocoraMap,
   applyEntitySeparation
 } from '../shared/mapData.js';
@@ -26,6 +27,7 @@ import { botsMethods } from './room/bots.js';
 import { wildlifeMethods } from './room/wildlife.js';
 import { stormMethods } from './room/storm.js';
 import { lagCompensationMethods } from './room/lagCompensation.js';
+import { swimmingMethods } from './room/swimming.js';
 
 export class GameRoom {
   constructor(io) {
@@ -80,6 +82,9 @@ export class GameRoom {
       spectating: false,
       hp: 100,
       maxHp: 100,
+      breath: SWIM_CONFIG.maxBreath, // aliento para nadar; a 0 empieza a ahogarse
+      isSwimming: false,
+      drownDamageAccum: 0,
       kills: 0,
       placement: 0,
       state: 'lobby',
@@ -244,6 +249,8 @@ export class GameRoom {
           p.onGround = true;
         }
       }
+
+      if (p.alive) this.updateSwimmingAndBreath(p, TICK_DT);
     }
 
     this.updateWildlife(TICK_DT, now);
@@ -301,6 +308,8 @@ export class GameRoom {
         reserveAmmo: p.reserveAmmo,
         medkits: p.medkits,
         bandages: p.bandages,
+        isSwimming: Boolean(p.isSwimming),
+        breath: Math.round(p.breath ?? SWIM_CONFIG.maxBreath),
         isHealing: p.healingUntil > Date.now(),
         healingItem: p.healingUntil > Date.now() ? p.healingItem : null,
         reloading: p.reloadingUntil > Date.now(),
@@ -327,5 +336,6 @@ Object.assign(
   botsMethods,
   wildlifeMethods,
   stormMethods,
-  lagCompensationMethods
+  lagCompensationMethods,
+  swimmingMethods
 );

@@ -76,7 +76,8 @@ export const sanitizers = {
       isSliding: optionalBool(p.isSliding),
       isCrouching: optionalBool(p.isCrouching),
       isVaulting: optionalBool(p.isVaulting),
-      moveMode: typeof p.moveMode === 'string' && /^[a-z]{1,12}$/.test(p.moveMode) ? p.moveMode : undefined,
+      // Modos como 'crouch_walk' o 'swim_idle' llevan guion bajo
+      moveMode: typeof p.moveMode === 'string' && /^[a-z_]{1,16}$/.test(p.moveMode) ? p.moveMode : undefined,
       state: typeof p.state === 'string' && INPUT_STATES.has(p.state) ? p.state : undefined
     };
     // La posición solo cuenta si llega completa

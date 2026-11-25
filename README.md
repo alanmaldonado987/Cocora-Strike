@@ -87,4 +87,10 @@ El servidor escucha automáticamente en **`0.0.0.0`** (todas las interfaces de r
 | **Usar Botiquín (+50 HP)** | `H` |
 | **Usar Venda Rápida (+20 HP)** | `G` o `Q` |
 | **Alternar Cámara (3ra Persona / 1ra Persona)** | `V` |
+| **Nadar** | Entra al río y muévete con `W` `A` `S` `D`; `Shift` nada más rápido pero gasta el doble de aliento |
 | **Silenciar / Activar Audio** | `M` o botón superior derecho |
+
+### Nado y ahogamiento
+- Con el agua por la cintura se **vadea** (más lento); en agua profunda se **nada** a flote, con el arma guardada (no se puede disparar, curar, agacharse ni saltar).
+- Nadar gasta **aliento** (barra azul sobre la salud): ~25 s nadando normal, ~14 s nadando rápido. Fuera del agua se recupera en ~4 s.
+- Con el aliento agotado te **ahogas**: pierdes 10 HP por segundo hasta salir del río.

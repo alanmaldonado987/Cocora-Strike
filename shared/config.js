@@ -6,7 +6,26 @@ export const BLOCK_SIZE = CELL_SIZE;
 export const GRID_SIZE = 320; // 320 x 2m = 640 x 640 metros reales (-320m a +320m)
 export const WORLD_SIZE = GRID_SIZE * CELL_SIZE;
 export const WORLD_HALF = WORLD_SIZE / 2; // 320m
-export const WATER_LEVEL = 3.2;
+// Superficie del río Quindío. Las orillas naturales nunca bajan de ~12.8 m, así que el agua queda
+// dentro del cauce; el lecho se excava relativo a este nivel (2.55 m de fondo en el centro).
+export const WATER_LEVEL = 9.0;
+export const RIVER_CENTER_DEPTH = 2.55; // profundidad en el centro del cauce
+export const RIVER_EDGE_DEPTH = 1.2; // profundidad junto a la orilla
+export const RIVER_FORD_DEPTH = 0.75; // vados: se cruzan caminando
+
+// Nado y ahogamiento
+export const SWIM_CONFIG = {
+  swimDepth: 1.3, // con más agua que esto se nada; con menos se vadea caminando
+  wadeSpeedMult: 0.65, // velocidad al vadear (agua por la cintura)
+  floatDepth: 1.38, // al nadar, los pies quedan a esta profundidad (cabeza y hombros fuera)
+  swimSpeed: 3.2,
+  swimSprintSpeed: 4.6,
+  maxBreath: 100,
+  drainPerSec: 4.0, // ~25 s nadando normal
+  sprintDrainPerSec: 7.0, // ~14 s nadando rápido (Shift)
+  regenPerSec: 25, // fuera del agua se recupera en ~4 s
+  drownDps: 10 // daño por segundo con el aliento agotado
+};
 export const DEFAULT_MAP_SEED = 202699;
 
 // Proporciones humanas reales (Personaje = 1.80 metros)

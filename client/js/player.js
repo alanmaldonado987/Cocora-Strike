@@ -19,11 +19,16 @@ import {
   PLAYER_EYE_HEIGHT,
   PLAYER_CROUCH_EYE_HEIGHT,
   PLAYER_SLIDE_EYE_HEIGHT,
+  WATER_LEVEL,
+  SWIM_CONFIG,
   computeTargetDescentSpeed,
   applyEntitySeparation,
   stepCharacterPhysics,
   findVaultableObstacle,
-  raycastVoxels
+  raycastVoxels,
+  getWaterDepthAt,
+  isSwimmingAt,
+  getSwimFloatY
 } from '/shared/mapData.js';
 
 let _sharedToonGradient = null;
@@ -896,6 +901,47 @@ export function createVoxelAvatar(name, colorIdx = 0, isLocal = false) {
 
       const speed = 13;
 
+      // Nado: crol al avanzar (cuerpo inclinado, brazadas alternas, patada) y pataleo vertical
+      // en el sitio. El arma va guardada.
+      if (moveMode === 'swim' || moveMode === 'swim_fast' || moveMode === 'swim_idle') {
+        weaponMount.visible = false;
+        const moving = moveMode !== 'swim_idle';
+        const stroke = walkPhase;
+        pelvisGroup.position.y = damp(pelvisGroup.position.y, moving ? 1.0 : 0.9, 8, dt);
+        pelvisGroup.rotation.x = damp(pelvisGroup.rotation.x, moving ? 1.05 : 0.12, 6, dt);
+        torsoGroup.rotation.set(
+          damp(torsoGroup.rotation.x, moving ? 0.12 : 0.04, 8, dt),
+          damp(torsoGroup.rotation.y, moving ? Math.sin(stroke) * 0.22 : 0, 8, dt),
+          damp(torsoGroup.rotation.z, 0, 8, dt)
+        );
+        if (moving) {
+          // Brazadas de crol: un brazo pasa por encima mientras el otro empuja bajo el agua
+          rightArm.shoulder.rotation.set(-1.55 + Math.sin(stroke) * 1.55, 0, -0.18);
+          leftArm.shoulder.rotation.set(-1.55 - Math.sin(stroke) * 1.55, 0, 0.18);
+          rightArm.elbow.rotation.x = damp(rightArm.elbow.rotation.x, -0.25 - Math.max(0, Math.cos(stroke)) * 0.7, 14, dt);
+          leftArm.elbow.rotation.x = damp(leftArm.elbow.rotation.x, -0.25 - Math.max(0, -Math.cos(stroke)) * 0.7, 14, dt);
+          const kick = Math.sin(stroke * 3) * 0.32;
+          leftLeg.hip.rotation.x = damp(leftLeg.hip.rotation.x, kick, 18, dt);
+          rightLeg.hip.rotation.x = damp(rightLeg.hip.rotation.x, -kick, 18, dt);
+          leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, 0.2 + Math.max(0, kick), 18, dt);
+          rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, 0.2 + Math.max(0, -kick), 18, dt);
+          headPivot.rotation.x = damp(headPivot.rotation.x, -0.85, 10, dt);
+        } else {
+          // Mantenerse a flote: brazos barriendo a los lados y piernas pedaleando
+          const tread = Math.sin(st.breathClock * 2.6);
+          rightArm.shoulder.rotation.set(-0.55 + tread * 0.2, 0, -0.75 - tread * 0.3);
+          leftArm.shoulder.rotation.set(-0.55 - tread * 0.2, 0, 0.75 + tread * 0.3);
+          rightArm.elbow.rotation.x = damp(rightArm.elbow.rotation.x, -0.5, 10, dt);
+          leftArm.elbow.rotation.x = damp(leftArm.elbow.rotation.x, -0.5, 10, dt);
+          leftLeg.hip.rotation.x = damp(leftLeg.hip.rotation.x, -0.35 + tread * 0.35, 10, dt);
+          rightLeg.hip.rotation.x = damp(rightLeg.hip.rotation.x, -0.35 - tread * 0.35, 10, dt);
+          leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, 0.75, 10, dt);
+          rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, 0.75, 10, dt);
+          headPivot.rotation.x = damp(headPivot.rotation.x, -pitch * 0.5, 10, dt);
+        }
+        return;
+      }
+
       if (state === 'plane' || moveMode === 'seated') {
         const turb = Math.sin(st.breathClock * 1.4) * 0.035;
         pelvisGroup.position.y = damp(pelvisGroup.position.y, 0.50, speed, dt);
@@ -1411,6 +1457,9 @@ export class LocalPlayerController {
 
     this.isCrouching = false;
     this.isSliding = false;
+    this.isSwimming = false;
+    this.swimStrokeAccum = 0;
+    this.breath = SWIM_CONFIG.maxBreath; // lo fija el servidor (autoritativo)
     this.isVaulting = false;
     this.vaultTimer = 0;
     this.vaultDuration = 0.42;
@@ -1515,6 +1564,7 @@ export class LocalPlayerController {
 
   tryRequestHeal(preferredType = 'medkit') {
     if (!this.alive || this.state !== 'ground' || !this.onGround || this.hp >= 100 || this.isHealing) return;
+    if (this.isSwimming) return; // no se puede vendar nadando
     if (this.medkits <= 0 && this.bandages <= 0) return;
     this.endSlide();
     this.reloading = false;
@@ -1567,7 +1617,7 @@ export class LocalPlayerController {
   }
 
   tryStartSlideOrCrouch(code) {
-    if (!this.alive || this.state !== 'ground' || !this.onGround) return;
+    if (!this.alive || this.state !== 'ground' || !this.onGround || this.isSwimming) return;
 
     const sprintingForward =
       (this.keys['ShiftLeft'] || this.keys['ShiftRight']) &&
@@ -1656,7 +1706,7 @@ export class LocalPlayerController {
             this.onJumpRequest?.();
           }
         } else if (this.state === 'ground') {
-          if (this.onGround && e.code === 'Space' && !this.isVaulting) {
+          if (this.onGround && e.code === 'Space' && !this.isVaulting && !this.isSwimming) {
             const pressingForward = Boolean(this.keys['KeyW'] || this.keys['ArrowUp']);
             const vaultTarget = pressingForward
               ? findVaultableObstacle(this.currentMap, this.x, this.y, this.z, this.yaw)
@@ -1803,6 +1853,7 @@ export class LocalPlayerController {
 
   tryFireShot(mapData = this.currentMap) {
     if (!this.alive || this.state !== 'ground' || this.reloading || !mapData) return;
+    if (this.isSwimming) return; // el arma va guardada mientras se nada
 
     if (this.isHealing) {
       this.cancelClientHeal(true);
@@ -2010,7 +2061,47 @@ export class LocalPlayerController {
         const prevY = this.y;
         const prevZ = this.z;
 
-        if (this.isVaulting) {
+        // Agua profunda: nadar a flote con la cabeza y los hombros fuera
+        const swimmingNow = !this.isVaulting && isSwimmingAt(mapData, this.x, this.y, this.z);
+        if (swimmingNow) {
+          if (!this.isSwimming) {
+            this.isSwimming = true;
+            this.endSlide();
+            this.isCrouching = false;
+            if (this.isHealing) this.cancelClientHeal(true);
+            this.audio.playSplash?.(Math.min(1.4, 0.5 + Math.abs(preVy) / 12));
+          }
+          const swimSpeed = sprinting ? SWIM_CONFIG.swimSprintSpeed : SWIM_CONFIG.swimSpeed;
+          stepCharacterPhysics(mapData, this, wishX * swimSpeed, wishZ * swimSpeed, dt, 0, PLAYER_RADIUS, PLAYER_HEIGHT);
+          if (remoteEntities.length > 0) {
+            applyEntitySeparation(this, remoteEntities, PLAYER_RADIUS, dt, mapData);
+          }
+          this.y = damp(this.y, getSwimFloatY(mapData, this.x, this.z), 5, dt);
+          this.vy = 0;
+          this.onGround = true;
+          this.airPeakY = this.y;
+          this.currentGroundClearance = 0;
+
+          const moved = Math.hypot(this.x - prevX, this.z - prevZ);
+          movingHoriz = moved > 0.004;
+          if (movingHoriz) {
+            this.walkPhase += dt * (sprinting ? 7.5 : 5.2);
+            this.moveMode = sprinting ? 'swim_fast' : 'swim';
+            this.swimStrokeAccum += moved;
+            if (this.swimStrokeAccum >= 1.6) {
+              this.swimStrokeAccum = 0;
+              this.audio.playSwimStroke?.();
+            }
+          } else {
+            this.moveMode = 'swim_idle';
+          }
+        } else if (this.isSwimming) {
+          this.isSwimming = false;
+        }
+
+        if (swimmingNow) {
+          // (todo el movimiento de nado ya se resolvió arriba)
+        } else if (this.isVaulting) {
           this.vaultTimer += dt;
           const vt = Math.min(1, this.vaultTimer / Math.max(0.1, this.vaultDuration));
           const smoothT = vt * vt * (3 - 2 * vt);
@@ -2083,7 +2174,10 @@ export class LocalPlayerController {
           const wMoveMult = WEAPONS[this.equipped]?.moveSpeedMult || 1.0;
           const healMult = this.isHealing ? HEAL_CONFIG.moveSpeedMult || 0.45 : 1.0;
           const baseSpeed = this.isCrouching ? 3.4 : sprinting ? 8.2 : 5.5;
-          const speed = baseSpeed * wMoveMult * healMult;
+          // Vadear: con el agua por encima de la rodilla se avanza más lento
+          const wading = this.y < WATER_LEVEL - 0.4 && getWaterDepthAt(mapData, this.x, this.z) > 0.45;
+          const wadeMult = wading ? SWIM_CONFIG.wadeSpeedMult : 1.0;
+          const speed = baseSpeed * wMoveMult * healMult * wadeMult;
           const effH = this.isCrouching ? PLAYER_CROUCH_HEIGHT : PLAYER_HEIGHT;
 
           if (this.isHealing) {
@@ -2331,7 +2425,8 @@ export class LocalPlayerController {
   }
 
   renderViewmodel(renderer) {
-    if (this.cameraMode === 'first' && this.state !== 'plane') {
+    // Nadando el arma va guardada: no se dibuja en primera persona
+    if (this.cameraMode === 'first' && this.state !== 'plane' && !this.isSwimming) {
       this.fpRig.render(renderer);
     }
   }

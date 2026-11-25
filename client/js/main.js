@@ -714,7 +714,7 @@ const net = new NetworkManager(scene, {
     planeState = snapshot.plane;
     stormState = snapshot.storm;
     if (snapshot.wildlife) {
-      world.syncWildlife(snapshot.wildlife);
+      world.syncWildlife(snapshot.wildlife, snapshot.t);
     }
     ui.aliveCount.textContent = String(snapshot.aliveCount ?? 0);
 
@@ -946,6 +946,10 @@ const net = new NetworkManager(scene, {
     ui.stormVignette.style.opacity = '0';
   }
 });
+
+// Fauna y jugadores comparten el reloj del servidor: se dibujan en el mismo instante y el
+// disparo envía ese instante para la compensación de latencia.
+world.wildlifeClock = net.serverClock;
 
 localPlayer.onJumpRequest = () => net.requestJump();
 localPlayer.onShootRequest = (payload) => net.requestShoot(payload);

@@ -1,13 +1,14 @@
 // client/js/network.js
 // Cliente Socket.IO optimizado (desacopla ticks del servidor a 20 Hz del renderizado a 60+ FPS):
-// - Interpolación suave de posición (Vector3.lerp) y rotación (Quaternion.slerp) sin crear objetos por fotograma
+// - Interpolación de snapshots con retardo fijo (interpolation.js): los jugadores remotos se dibujan
+//   ~100 ms en el pasado entre los dos snapshots del servidor que rodean ese instante, sin tirones
 // - Liberación completa de memoria WebGL (avatar.dispose) al desconectarse o reiniciar partida
 // - Soporte para animación canalizada de curación (2.0s) con partículas verdes ascendentes
 
-import * as THREE from 'three';
 import { createVoxelAvatar } from './player.js';
+import { ServerClock, SnapshotBuffer, createSampleOut } from './interpolation.js';
 
-const _yAxis = new THREE.Vector3(0, 1, 0);
+const _sample = createSampleOut();
 
 export class NetworkManager {
   constructor(scene, callbacks = {}) {
@@ -17,6 +18,8 @@ export class NetworkManager {
     this.selfId = null;
 
     this.remotePlayers = new Map();
+    this.serverClock = new ServerClock();
+    this.lastRenderTime = null;
     this.lastSendTime = 0;
     this._remoteEntityBuffer = [];
 
@@ -52,7 +55,8 @@ export class NetworkManager {
     });
 
     s.on('world_tick', (snapshot) => {
-      this.syncSnapshotPlayers(snapshot.players || {});
+      this.serverClock.observe(snapshot.t, performance.now());
+      this.syncSnapshotPlayers(snapshot.players || {}, snapshot.t);
       this.callbacks.onWorldTick?.(snapshot);
     });
 
@@ -141,8 +145,11 @@ export class NetworkManager {
     });
   }
 
-  syncSnapshotPlayers(playersObj) {
+  syncSnapshotPlayers(playersObj, serverTime) {
     const activeIds = new Set(Object.keys(playersObj));
+    // Snapshots sin hora (p. ej. game_started) se fechan con la hora estimada del servidor
+    const hasTime = Number.isFinite(serverTime);
+    const t = hasTime ? serverTime : (this.serverClock.serverNow(performance.now()) ?? 0);
 
     for (const [id, entry] of this.remotePlayers.entries()) {
       if (!activeIds.has(id)) {
@@ -159,9 +166,7 @@ export class NetworkManager {
       if (!entry) {
         const avatar = createVoxelAvatar(pData.name, pData.colorIdx, false);
         avatar.root.position.set(pData.x, pData.y, pData.z);
-        const curQuat = new THREE.Quaternion().setFromAxisAngle(_yAxis, pData.yaw || 0);
-        const targetQuat = curQuat.clone();
-        avatar.root.quaternion.copy(curQuat);
+        avatar.root.rotation.set(0, pData.yaw || 0, 0);
         avatar.setHealth(pData.hp ?? 100, pData.maxHp ?? 100);
         this.scene.add(avatar.root);
         entry = {
@@ -171,9 +176,7 @@ export class NetworkManager {
           hp: pData.hp ?? 100,
           maxHp: pData.maxHp ?? 100,
           seatIndex: pData.seatIndex || 0,
-          targetPos: new THREE.Vector3(pData.x, pData.y, pData.z),
-          curQuat,
-          targetQuat,
+          buffer: new SnapshotBuffer(),
           yaw: pData.yaw || 0,
           pitch: pData.pitch || 0,
           animWalk: pData.animWalk || 0,
@@ -190,30 +193,40 @@ export class NetworkManager {
         };
         this.remotePlayers.set(id, entry);
       } else {
+        // Datos que deben reflejarse al instante (vida, muerte, arma, asiento)
         entry.seatIndex = pData.seatIndex ?? entry.seatIndex;
         entry.hp = pData.hp ?? entry.hp;
         entry.maxHp = pData.maxHp ?? entry.maxHp;
         entry.avatar.setHealth(entry.hp, entry.maxHp);
-        entry.targetPos.set(pData.x, pData.y, pData.z);
-        entry.yaw = pData.yaw || 0;
-        entry.targetQuat.setFromAxisAngle(_yAxis, entry.yaw);
-        entry.pitch = pData.pitch || 0;
-        entry.animWalk = pData.animWalk || 0;
-        entry.moveMode = pData.moveMode || 'idle';
-        entry.isSliding = Boolean(pData.isSliding);
-        entry.isCrouching = Boolean(pData.isCrouching);
-        entry.isHealing = Boolean(pData.isHealing);
-        entry.state = pData.state;
         entry.equipped = pData.equipped;
         entry.alive = pData.alive;
       }
+
+      if (!hasTime) entry.buffer.clear();
+      entry.buffer.push(t, pData.x, pData.y, pData.z, pData.yaw || 0, pData);
     }
   }
 
+  // Copia el estado de animación del snapshot interpolado, para que pose y posición coincidan
+  applySampledPose(entry, data) {
+    if (!data) return;
+    entry.pitch = data.pitch || 0;
+    entry.animWalk = data.animWalk || 0;
+    entry.moveMode = data.moveMode || 'idle';
+    entry.isSliding = Boolean(data.isSliding);
+    entry.isCrouching = Boolean(data.isCrouching);
+    entry.isHealing = Boolean(data.isHealing);
+    entry.state = data.state;
+  }
+
   updateInterpolation(dt, worldInstance = null, planeState = null, mapData = null) {
-    const lerpFactor = 1 - Math.exp(-14 * dt);
+    const renderTime = this.serverClock.renderTime(performance.now());
+    this.lastRenderTime = renderTime; // se envía con cada disparo (compensación de latencia)
 
     for (const entry of this.remotePlayers.values()) {
+      const hasSample = entry.buffer.sample(renderTime, _sample);
+      if (hasSample) this.applySampledPose(entry, _sample.data);
+
       if (!entry.alive || entry.state === 'lobby') {
         entry.avatar.root.visible = false;
         continue;
@@ -233,27 +246,20 @@ export class NetworkManager {
         continue;
       }
 
-      if (entry.avatar.root.position.distanceToSquared(entry.targetPos) > 400) {
-        entry.avatar.root.position.copy(entry.targetPos);
-        entry.curQuat.copy(entry.targetQuat);
-      } else {
-        entry.avatar.root.position.lerp(entry.targetPos, lerpFactor);
-        entry.curQuat.slerp(entry.targetQuat, lerpFactor);
-      }
+      if (!hasSample) continue;
+      // Posición y orientación interpoladas entre los snapshots que rodean renderTime
+      entry.yaw = _sample.yaw;
+      entry.avatar.root.position.set(_sample.x, _sample.y, _sample.z);
 
       if (mapData) {
-        const minG = mapData.getGroundHeightAt(
-          entry.avatar.root.position.x,
-          entry.avatar.root.position.z,
-          entry.targetPos.y
-        );
+        const minG = mapData.getGroundHeightAt(_sample.x, _sample.z, _sample.y);
         if (entry.avatar.root.position.y < minG) {
           entry.avatar.root.position.y = minG;
         }
       }
 
       entry.avatar.root.visible = true;
-      entry.avatar.root.quaternion.copy(entry.curQuat);
+      entry.avatar.root.rotation.set(0, entry.yaw, 0);
       entry.avatar.setWeapon(entry.equipped);
       entry.avatar.animate(
         entry.animWalk,
@@ -372,7 +378,8 @@ export class NetworkManager {
   }
 
   requestShoot(payload) {
-    this.socket.emit('player_shoot', payload);
+    // viewTime: instante del servidor que se veía en pantalla al disparar
+    this.socket.emit('player_shoot', { ...payload, viewTime: this.lastRenderTime ?? undefined });
   }
 
   requestReload() {

@@ -95,7 +95,9 @@ export const sanitizers = {
     if (!origin || !dir) return null;
     const len = Math.hypot(dir.x, dir.y, dir.z);
     if (len < 1e-6) return null;
-    return { origin, dir: { x: dir.x / len, y: dir.y / len, z: dir.z / len } };
+    // viewTime: hora del servidor que veía el tirador (el servidor la acota al rebobinar)
+    const viewTime = finite(p.viewTime) ? p.viewTime : null;
+    return { origin, dir: { x: dir.x / len, y: dir.y / len, z: dir.z / len }, viewTime };
   },
 
   player_switch_weapon: (p) => {

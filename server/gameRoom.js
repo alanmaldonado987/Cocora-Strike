@@ -25,6 +25,7 @@ import { combatMethods } from './room/combat.js';
 import { botsMethods } from './room/bots.js';
 import { wildlifeMethods } from './room/wildlife.js';
 import { stormMethods } from './room/storm.js';
+import { lagCompensationMethods } from './room/lagCompensation.js';
 
 export class GameRoom {
   constructor(io) {
@@ -248,7 +249,10 @@ export class GameRoom {
     this.updateWildlife(TICK_DT, now);
     this.updateStorm(TICK_DT);
 
+    this.recordPositionHistory(now);
+
     this.io.emit('world_tick', {
+      t: now, // hora del servidor (ms): el cliente interpola las entidades remotas con ella
       players: this.serializePlayers(),
       wildlife: this.serializeWildlife(),
       plane: this.plane,
@@ -322,5 +326,6 @@ Object.assign(
   combatMethods,
   botsMethods,
   wildlifeMethods,
-  stormMethods
+  stormMethods,
+  lagCompensationMethods
 );

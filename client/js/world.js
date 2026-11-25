@@ -22,6 +22,9 @@ import {
   generateCocoraMap
 } from '/shared/mapData.js';
 import { createDetailedWeaponMesh, getSharedToonGradient } from './player.js';
+import { ServerClock, SnapshotBuffer, createSampleOut } from './interpolation.js';
+
+const _wildSample = createSampleOut();
 
 // Vectores, matrices y cuaterniones temporales reutilizables (CERO asignaciones por fotograma)
 const _tmpVecA = new THREE.Vector3();
@@ -905,6 +908,7 @@ export class VoxelWorld {
     this.lootMeshes = new Map();
     this.lootItemsData = new Map();
     this.wildlifeEntries = new Map();
+    this.wildlifeClock = new ServerClock();
     this.doorVisuals = new Map();
     this.windowVisuals = new Map();
 
@@ -2851,7 +2855,10 @@ export class VoxelWorld {
     return out.kind ? out : null;
   }
 
-  syncWildlife(list = []) {
+  syncWildlife(list = [], serverTime) {
+    const hasTime = Number.isFinite(serverTime);
+    if (hasTime) this.wildlifeClock.observe(serverTime, performance.now());
+    const t = hasTime ? serverTime : (this.wildlifeClock.serverNow(performance.now()) ?? 0);
     const activeIds = new Set(list.map((a) => a.id));
     for (const [id, entry] of this.wildlifeEntries.entries()) {
       if (!activeIds.has(id)) {
@@ -2866,16 +2873,13 @@ export class VoxelWorld {
       if (!entry) {
         const model = createWildlifeModel(data.species);
         model.root.position.set(data.x, data.y, data.z);
-        const curQuat = new THREE.Quaternion().setFromAxisAngle(_yAxis, data.yaw);
-        const targetQuat = curQuat.clone();
-        model.root.quaternion.copy(curQuat);
+        model.root.rotation.set(0, data.yaw, 0);
         model.hpBarSprite.userData.updateBar(data.hp, data.maxHp, data.aiState === 'hostile');
         this.wildlifeGroup.add(model.root);
         entry = {
           model,
-          targetPos: new THREE.Vector3(data.x, data.y, data.z),
-          curQuat,
-          targetQuat,
+          buffer: new SnapshotBuffer(),
+          barKey: `${data.hp}|${data.maxHp}|${data.aiState === 'hostile'}`,
           hp: data.hp,
           maxHp: data.maxHp,
           aiState: data.aiState,
@@ -2885,15 +2889,20 @@ export class VoxelWorld {
         };
         this.wildlifeEntries.set(data.id, entry);
       } else {
-        entry.targetPos.set(data.x, data.y, data.z);
-        entry.targetQuat.setFromAxisAngle(_yAxis, data.yaw);
         entry.hp = data.hp;
         entry.maxHp = data.maxHp;
         entry.aiState = data.aiState;
         entry.pose = data.pose;
         entry.animPhase = data.animPhase || entry.animPhase;
-        entry.model.hpBarSprite.userData.updateBar(data.hp, data.maxHp, data.aiState === 'hostile');
+        // Redibujar la barra de vida (canvas + subida de textura) solo si cambió
+        const barKey = `${data.hp}|${data.maxHp}|${data.aiState === 'hostile'}`;
+        if (barKey !== entry.barKey) {
+          entry.barKey = barKey;
+          entry.model.hpBarSprite.userData.updateBar(data.hp, data.maxHp, data.aiState === 'hostile');
+        }
       }
+      if (!hasTime) entry.buffer.clear();
+      entry.buffer.push(t, data.x, data.y, data.z, data.yaw, null);
     }
   }
 
@@ -2918,17 +2927,20 @@ export class VoxelWorld {
 
   updateWildlifeVisuals(dt, timeSec) {
     const lerpF = 1 - Math.exp(-12 * dt);
+    const renderTime = this.wildlifeClock.renderTime(performance.now());
     for (const entry of this.wildlifeEntries.values()) {
       const m = entry.model;
-      m.root.position.lerp(entry.targetPos, lerpF);
+      // Posición y orientación interpoladas entre snapshots del servidor (sin tirones)
+      if (entry.buffer.sample(renderTime, _wildSample)) {
+        m.root.position.set(_wildSample.x, _wildSample.y, _wildSample.z);
+        m.root.rotation.set(0, _wildSample.yaw, 0);
+      }
 
       if (m.species !== 'condor' && this.mapData) {
-        const minG = this.mapData.getGroundHeightAt(m.root.position.x, m.root.position.z, entry.targetPos.y);
+        const minG = this.mapData.getGroundHeightAt(m.root.position.x, m.root.position.z, _wildSample.y);
         if (m.root.position.y < minG) m.root.position.y = minG;
       }
 
-      entry.curQuat.slerp(entry.targetQuat, lerpF);
-      m.root.quaternion.copy(entry.curQuat);
       m.alertSprite.visible = entry.aiState === 'hostile';
 
       if (entry.flashTimer > 0) {

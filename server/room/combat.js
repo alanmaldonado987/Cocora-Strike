@@ -8,6 +8,7 @@ import {
   raycastVoxels,
   hasLineOfSight
 } from '../../shared/mapData.js';
+import { positionAt, resolveRewindTime } from './lagCompensation.js';
 
 export const combatMethods = {
   handleShoot(socketId, payload) {
@@ -19,11 +20,13 @@ export const combatMethods = {
     if (shooter.healingUntil > 0) {
       this.cancelHealForPlayer(shooter);
     }
-    this.executeAuthoritativeShot(shooter, payload.origin, payload.dir, shooter.equipped, 1.0);
+    this.executeAuthoritativeShot(shooter, payload.origin, payload.dir, shooter.equipped, 1.0, payload.viewTime);
   },
 
-  executeAuthoritativeShot(shooter, rawOrigin, rawDir, weaponId, damageMult = 1.0) {
+  // viewTime: instante (hora del servidor) en que el tirador veía a los demás; los bots no lo usan.
+  executeAuthoritativeShot(shooter, rawOrigin, rawDir, weaponId, damageMult = 1.0, viewTime = null) {
     const now = Date.now();
+    const rewindTime = shooter.isBot ? null : resolveRewindTime(viewTime, now);
     const wSpec = WEAPONS[weaponId];
     const wState = shooter.weapons[weaponId];
     if (!wSpec || !wState || !wState.unlocked) return;
@@ -106,7 +109,8 @@ export const combatMethods = {
 
       for (const target of this.players.values()) {
         if (target.id === shooter.id || !target.alive || target.state === 'plane' || target.spectating) continue;
-        const hit = this.intersectRayPlayer(origin, dir, target, bestDist);
+        const pos = rewindTime === null ? target : positionAt(target, rewindTime);
+        const hit = this.intersectRayPlayer(origin, dir, target, bestDist, pos);
         if (hit && hit.dist < bestDist) {
           bestDist = hit.dist;
           endPoint = hit.point;
@@ -118,12 +122,13 @@ export const combatMethods = {
 
       for (const animal of this.wildlife.values()) {
         if (!animal.alive) continue;
+        const aPos = rewindTime === null ? animal : positionAt(animal, rewindTime);
         const hit = this.intersectRayCylinder(
           origin,
           dir,
-          animal.x,
-          animal.y,
-          animal.z,
+          aPos.x,
+          aPos.y,
+          aPos.z,
           animal.radius + 0.14,
           animal.height + 0.12,
           bestDist
@@ -244,20 +249,21 @@ export const combatMethods = {
     };
   },
 
-  intersectRayPlayer(origin, dir, target, maxDist) {
+  // pos: posición a usar para el objetivo (por defecto la actual; con compensación de latencia, la rebobinada)
+  intersectRayPlayer(origin, dir, target, maxDist, pos = target) {
     const effHeight = this.getParticipantHeight(target);
     const hit = this.intersectRayCylinder(
       origin,
       dir,
-      target.x,
-      target.y,
-      target.z,
+      pos.x,
+      pos.y,
+      pos.z,
       PLAYER_RADIUS + 0.15,
       effHeight,
       maxDist
     );
     if (!hit) return null;
-    const headThreshold = target.y + effHeight * 0.74;
+    const headThreshold = pos.y + effHeight * 0.74;
     return {
       ...hit,
       isHeadshot: hit.point.y >= headThreshold

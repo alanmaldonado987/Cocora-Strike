@@ -1,0 +1,16 @@
+{
+  "name": "cocora-royale-voxel",
+  "version": "1.0.0",
+  "description": "Battle Royale multijugador 3D voxel ambientado en el Valle del Cocora y Salento (Colombia) con Three.js, Node.js y Socket.IO",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1",
+    "three": "^0.170.0"
+  }
+}

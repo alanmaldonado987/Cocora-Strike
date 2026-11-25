@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Batalla en el Cocora — Battle Royale Cel-Shaded 3D (Colombia)</title>
+  <link rel="stylesheet" href="./style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/three/three.module.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <!-- Lienzo WebGL 3D -->
+  <div id="game-container"></div>
+
+  <!-- Efecto de daño / curación / tormenta -->
+  <div id="damage-flash"></div>
+  <div id="storm-vignette"></div>
+
+  <!-- Botón global de Audio Sintetizado (Esquina superior derecha) -->
+  <button id="btn-mute" class="floating-audio-btn" title="Silenciar / Activar Audio (Tecla M)">
+    🔊 Audio ON
+  </button>
+
+  <!-- ==================== PANTALLA 1: LOBBY ==================== -->
+  <section id="lobby-screen" class="overlay-screen">
+    <div class="lobby-card">
+      <div class="colombia-ribbon">
+        <span class="c-yellow"></span>
+        <span class="c-blue"></span>
+        <span class="c-red"></span>
+      </div>
+
+      <header class="lobby-header">
+        <span class="region-badge">QUINDÍO · COLOMBIA · CEL-SHADED 3D · MULTIJUGADOR LAN</span>
+        <h1>BATALLA EN EL COCORA</h1>
+        <p class="subtitle">
+          Salta a ~196m (10s de caída libre) hacia el monumento COCORA, el helicóptero estrellado y el pueblo paisa con puertas y cristales dinámicos.
+        </p>
+        <div id="lan-url-banner" class="lan-banner hidden"></div>
+      </header>
+
+      <!-- Paso 1: Ingresar Nickname -->
+      <div id="join-panel" class="panel-box">
+        <label for="nickname-input">Tu Apodo de Combatiente</label>
+        <div class="join-row">
+          <input
+            type="text"
+            id="nickname-input"
+            maxlength="16"
+            placeholder="Ej. ArrieroPaisa"
+            autocomplete="off"
+          />
+          <button id="btn-join-lobby" class="btn btn-primary">Entrar al Lobby</button>
+        </div>
+      </div>
+
+      <!-- Paso 2: Sala de espera multijugador + Configuración de Bots -->
+      <div id="waiting-panel" class="panel-box hidden">
+        <div class="waiting-top">
+          <div>
+            <h2>Sala de Espera <span id="lobby-count" class="pill-count">0</span></h2>
+            <p id="lobby-countdown" class="countdown-text">
+              Configura los Bots IA o invita amigos por Wi-Fi / LAN para jugar...
+            </p>
+          </div>
+          <div class="bot-controls">
+            <button id="btn-add-bot" class="btn btn-secondary" title="Añadir un Bot extra">+ Bot</button>
+            <button id="btn-clear-bots" class="btn btn-ghost" title="Dejar 0 Bots para jugar solo entre amigos LAN">0 Bots (Solo LAN)</button>
+          </div>
+        </div>
+
+        <div class="bot-config-bar">
+          <div class="config-field">
+            <label for="bot-difficulty-select">🎯 Dificultad de Bots IA</label>
+            <select id="bot-difficulty-select">
+              <option value="easy" selected>Fácil (Recomendado · Reacción 1.5s)</option>
+              <option value="normal">Normal (Equilibrado)</option>
+              <option value="hard">Difícil (Veterano)</option>
+            </select>
+          </div>
+          <div class="config-field">
+            <label for="bot-count-select">🤖 Cantidad de Bots (0–8)</label>
+            <select id="bot-count-select">
+              <option value="0">0 Bots (Solo Humanos LAN)</option>
+              <option value="2">2 Bots</option>
+              <option value="4">4 Bots</option>
+              <option value="6" selected>6 Bots (Estándar)</option>
+              <option value="8">8 Bots (Máximo)</option>
+            </select>
+          </div>
+        </div>
+
+        <ul id="lobby-players-list" class="players-grid"></ul>
+
+        <div class="start-actions">
+          <button id="btn-start-solo" class="btn btn-accent">
+            🤖 Partida Rápida (Rellenar con Bots)
+          </button>
+          <button id="btn-start-match" class="btn btn-primary">
+            ✈️ Iniciar Partida Ahora
+          </button>
+        </div>
+      </div>
+
+      <!-- Guía rápida de controles -->
+      <div class="controls-guide">
+        <div><kbd>WASD</kbd> Moverse</div>
+        <div><kbd>W+Espacio</kbd> Parkour / Saltar</div>
+        <div><kbd>E</kbd> Recoger · Puertas</div>
+        <div><kbd>Shift</kbd> Sprint</div>
+        <div><kbd>C</kbd> Sigilo Arbusto</div>
+        <div><kbd>Shift+W+C</kbd> Derrape</div>
+        <div><kbd>Clic Izq</kbd> Disparar</div>
+        <div><kbd>Clic Der</kbd> Mira / Zoom</div>
+        <div><kbd>1</kbd>–<kbd>5</kbd> Armas</div>
+        <div><kbd>R</kbd> Recargar</div>
+        <div><kbd>H</kbd> Botiquín (2s)</div>
+        <div><kbd>G</kbd>/<kbd>Q</kbd> Venda (2s)</div>
+        <div><kbd>V</kbd> Cámara 1ra/3ra</div>
+        <div><kbd>M</kbd> Mute</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== PANTALLA 2: HUD DE REFERENCIA ==================== -->
+  <section id="hud-screen" class="hidden">
+    <!-- Mira Telescópica de Francotirador (Zoom Óptico FOV 22) -->
+    <div id="sniper-scope-overlay" class="sniper-scope hidden">
+      <div class="scope-circle">
+        <span class="scope-line-h"></span>
+        <span class="scope-line-v"></span>
+        <span class="scope-center-dot"></span>
+        <span class="scope-mil m-left"></span>
+        <span class="scope-mil m-right"></span>
+        <span class="scope-mil m-bottom"></span>
+        <div class="scope-telemetry">ÓPTICA CÓNDOR 8X · CALIBRADA</div>
+      </div>
+    </div>
+
+    <!-- 1. ESQUINA SUPERIOR IZQUIERDA: Minimapa Circular con Radar + Estado de Tormenta -->
+    <div class="hud-top-left">
+      <div class="minimap-frame">
+        <canvas id="minimap-canvas" width="176" height="176"></canvas>
+        <span class="compass-n">N</span>
+        <span class="minimap-label">COCORA</span>
+      </div>
+      <div class="storm-box">
+        <span id="storm-phase-text" class="storm-title">Zona · Fase 1</span>
+        <strong id="storm-timer-text" class="storm-timer">00:28</strong>
+      </div>
+    </div>
+
+    <!-- 2. ESQUINA SUPERIOR DERECHA: VIVOS: X y BAJAS: X -->
+    <div class="hud-top-right">
+      <div class="stat-pill alive-pill">
+        <span class="stat-label">VIVOS:</span>
+        <strong id="alive-count">0</strong>
+      </div>
+      <div class="stat-pill kills-pill">
+        <span class="stat-label">BAJAS:</span>
+        <strong id="kills-count">0</strong>
+      </div>
+    </div>
+
+    <!-- Killfeed -->
+    <div id="killfeed" class="killfeed"></div>
+
+    <!-- Alertas Superiores (Tormenta / Avión / PointerLock) -->
+    <div id="storm-warning" class="storm-warning hidden">
+      ⚡ ¡FUERA DE LA ZONA SEGURA! DIRÍGETE AL CÍRCULO BLANCO ⚡
+    </div>
+    <div id="action-banner" class="action-banner hidden"></div>
+    <div id="pointer-prompt" class="pointer-prompt hidden">
+      Haz <strong>Clic en la pantalla</strong> para capturar el ratón y apuntar
+    </div>
+
+    <!-- 3. CENTRO DE PANTALLA: Mira Finísima de 4 Líneas Abiertas + Punto Central -->
+    <div id="crosshair" class="crosshair" data-weapon="fists" data-ads="false">
+      <span class="ch-ring"></span>
+      <span class="ch-line ch-top"></span>
+      <span class="ch-line ch-right"></span>
+      <span class="ch-line ch-bottom"></span>
+      <span class="ch-line ch-left"></span>
+      <span class="ch-dot"></span>
+      <div id="hitmarker" class="hitmarker hidden"></div>
+    </div>
+
+    <div id="floating-dmg-layer" class="floating-dmg-layer"></div>
+
+    <div id="target-hud" class="target-hud hidden">
+      <div class="target-hud-top">
+        <span id="target-hud-name">Enemigo</span>
+        <strong id="target-hud-hp">100 / 100</strong>
+      </div>
+      <div class="target-hud-track">
+        <div id="target-hud-fill" class="target-hud-fill"></div>
+      </div>
+    </div>
+
+    <div id="status-toast" class="status-toast hidden"></div>
+
+    <!-- Barra de Curación Canalizada (2.0 segundos) -->
+    <div id="heal-bar-wrap" class="heal-wrap hidden">
+      <div class="heal-top">
+        <span id="heal-bar-label">🩹 APLICANDO BOTIQUÍN...</span>
+        <strong id="heal-bar-timer">2.0s</strong>
+      </div>
+      <div class="heal-track">
+        <div id="heal-bar-fill" class="heal-fill"></div>
+      </div>
+    </div>
+
+    <!-- Aviso Contextual [E] RECOGER... / [E] ABRIR PUERTA justo sobre la barra de salud -->
+    <div id="interact-prompt" class="interact-prompt hidden">[E] RECOGER BOTIQUÍN</div>
+
+    <!-- 4. CENTRO INFERIOR: Barra de SALUD Verde Brillante con Contorno Oscuro (85/100) -->
+    <div class="hud-bottom-center">
+      <div id="stealth-badge" class="stealth-badge hidden">
+        🌿 OCULTO EN ARBUSTO (SIGILO ACTIVO)
+      </div>
+      <div class="hp-panel">
+        <div class="hp-bar-bg">
+          <div id="hp-fill" class="hp-bar-fill"></div>
+          <div class="hp-bar-overlay">
+            <span class="hp-label">SALUD</span>
+            <strong id="hp-text">100/100</strong>
+          </div>
+        </div>
+        <div class="consumables-row">
+          <span id="medkit-badge" class="consumable-chip medkit-chip">🩹 [H] Botiquín: <strong id="medkit-count">0</strong></span>
+          <span id="bandage-badge" class="consumable-chip bandage-chip">🧻 [G] Vendas: <strong id="bandage-count">1</strong></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 5. ESQUINA INFERIOR DERECHA: Panel de Arma Equipada (Nombre, Silueta, Barra de Carga y Contador 25/75) -->
+    <div class="hud-bottom-right">
+      <div id="reload-bar-wrap" class="reload-wrap hidden">
+        <span>RECARGANDO ARMA...</span>
+        <div class="reload-track"><div id="reload-bar-fill" class="reload-fill"></div></div>
+      </div>
+
+      <div class="ammo-box">
+        <div class="weapon-header-row">
+          <div id="weapon-name" class="weapon-title">MACHETE CAFETERO</div>
+        </div>
+        <div class="weapon-body-row">
+          <svg id="weapon-icon-svg" class="weapon-silhouette" viewBox="0 0 120 38" aria-hidden="true">
+            <path id="weapon-icon-path" d="M12 25 L28 23 L32 18 L106 14 L112 19 L32 25 L28 29 L12 29 Z" />
+          </svg>
+          <div class="ammo-numbers">
+            <span id="ammo-current">∞</span><small id="ammo-reserve"></small>
+          </div>
+        </div>
+        <div class="weapon-charge-track">
+          <div id="weapon-charge-fill" class="weapon-charge-fill"></div>
+        </div>
+      </div>
+
+      <div class="weapon-slots">
+        <div id="slot-fists" class="w-slot active">
+          <span class="slot-key">0</span>
+          <span class="slot-name">Machete</span>
+        </div>
+        <div id="slot-pistol" class="w-slot locked">
+          <span class="slot-key">1</span>
+          <span class="slot-name">9mm</span>
+        </div>
+        <div id="slot-shotgun" class="w-slot locked">
+          <span class="slot-key">2</span>
+          <span class="slot-name">12G</span>
+        </div>
+        <div id="slot-smg" class="w-slot locked">
+          <span class="slot-key">3</span>
+          <span class="slot-name">SMG</span>
+        </div>
+        <div id="slot-rifle" class="w-slot locked">
+          <span class="slot-key">4</span>
+          <span class="slot-name">AK-47</span>
+        </div>
+        <div id="slot-sniper" class="w-slot locked">
+          <span class="slot-key">5</span>
+          <span class="slot-name">Sniper</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== PANTALLA 3: FIN DE PARTIDA ==================== -->
+  <section id="gameover-screen" class="overlay-screen hidden">
+    <div class="gameover-card">
+      <div class="colombia-ribbon">
+        <span class="c-yellow"></span>
+        <span class="c-blue"></span>
+        <span class="c-red"></span>
+      </div>
+      <h1 id="gameover-title">🏆 ¡VICTORIA EN EL COCORA!</h1>
+      <p id="gameover-winner" class="winner-banner">Ganador: ---</p>
+
+      <div class="ranking-wrapper">
+        <table class="ranking-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Combatiente</th>
+              <th>Tipo</th>
+              <th>Bajas</th>
+            </tr>
+          </thead>
+          <tbody id="gameover-ranking"></tbody>
+        </table>
+      </div>
+
+      <button id="btn-back-lobby" class="btn btn-primary btn-large">
+        Volver a la Sala de Espera
+      </button>
+    </div>
+  </section>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>

@@ -48,6 +48,11 @@ let currentMap = world.buildFromSeed(DEFAULT_MAP_SEED);
 
 const localPlayer = new LocalPlayerController(scene, camera, renderer.domElement, audio);
 
+// Modo depuración (?debug en la URL): expone objetos internos para medir rendimiento desde la consola.
+if (new URLSearchParams(window.location.search).has('debug')) {
+  window.__cocoro = { THREE, renderer, scene, camera, world, localPlayer };
+}
+
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
@@ -1040,7 +1045,10 @@ let minimapAccum = 0;
 
 function animate() {
   requestAnimationFrame(animate);
+  renderFrame();
+}
 
+function renderFrame() {
   const dt = Math.min(0.05, clock.getDelta());
   const elapsed = clock.elapsedTime;
 
@@ -1056,8 +1064,15 @@ function animate() {
     drawMinimap(elapsed);
   }
 
+  world.updateRenderBudget(localPlayer, camera, dt);
   renderer.render(scene, camera);
   localPlayer.renderViewmodel(renderer);
+}
+
+if (window.__cocoro) {
+  // Permite avanzar fotogramas a mano desde la consola aunque la pestaña esté en segundo plano
+  window.__cocoro.renderFrame = renderFrame;
+  window.__cocoro.net = net;
 }
 
 animate();

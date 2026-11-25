@@ -33,6 +33,39 @@ const _tmpQuatB = new THREE.Quaternion();
 const _tmpMat4 = new THREE.Matrix4();
 const _yAxis = new THREE.Vector3(0, 1, 0);
 
+// ==================== PRESUPUESTO DE RENDER (sin pérdida de calidad) ====================
+// Terreno y vegetación se dividen en bloques para que la cámara y la sombra solar solo
+// dibujen lo que cae dentro de su volumen. El resultado en pantalla es idéntico.
+const TERRAIN_CHUNK_CELLS = 40; // 40 celdas x 2 m = bloques de 80 m
+const FOLIAGE_TILE_SIZE = 160; // metros por bloque de instancias
+const FOLIAGE_BOUNDS_PADDING = 3.0; // margen por el balanceo del viento en GPU
+
+// Luces puntuales: número FIJO en la escena (evita recompilar shaders cuando una luz
+// aparece/desaparece) y solo se encienden las que pueden iluminar algo visible.
+const MAX_ACTIVE_POINT_LIGHTS = 6;
+const POINT_LIGHT_FADE_RATE = 6.0; // fundido de ~0.17 s al cambiar de luz
+
+// Sol: desplazamiento fijo respecto al jugador y ajuste a la rejilla de texels del mapa de sombras
+const SUN_OFFSET = new THREE.Vector3(68, 118, 52);
+const _sunDir = SUN_OFFSET.clone().normalize();
+const _sunRight = new THREE.Vector3().crossVectors(_yAxis, _sunDir).normalize();
+const _sunUp = new THREE.Vector3().crossVectors(_sunDir, _sunRight);
+const _sunSnapped = new THREE.Vector3();
+const _viewerVec = new THREE.Vector3();
+const _frustum = new THREE.Frustum();
+const _projView = new THREE.Matrix4();
+const _lightSphere = new THREE.Sphere();
+
+function isVisibleInScene(obj) {
+  let o = obj;
+  while (o) {
+    if (!o.visible) return false;
+    if (o.isScene) return true;
+    o = o.parent;
+  }
+  return false;
+}
+
 function damp(current, target, lambda, dt) {
   return current + (target - current) * (1 - Math.exp(-lambda * dt));
 }
@@ -943,6 +976,126 @@ export class VoxelWorld {
     }
   }
 
+  // Registra una fuente de luz puntual del mapa. En lugar de crear un THREE.PointLight
+  // (cada uno encarece todos los píxeles iluminados), se guarda un anclaje que sigue a su
+  // objeto padre; updateRenderBudget() asigna las luces reales del pool a los anclajes visibles.
+  addLightAnchor(parent, color, intensity, distance, decay, x, y, z, persistent = false) {
+    const anchor = new THREE.Object3D();
+    anchor.position.set(x, y, z);
+    anchor.userData.light = { color: new THREE.Color(color), intensity, distance, decay, persistent };
+    anchor.userData.worldPos = new THREE.Vector3();
+    anchor.userData.lightScore = 0;
+    parent.add(anchor);
+    this.lightAnchors.push(anchor);
+    return anchor;
+  }
+
+  resetMapLightAnchors() {
+    this.lightAnchors = this.lightAnchors.filter((a) => a.userData.light.persistent);
+    for (const slot of this.pointLightSlots) {
+      slot.anchor = null;
+      slot.weight = 0;
+      slot.light.intensity = 0;
+    }
+  }
+
+  // Llamar una vez por fotograma, justo antes de renderizar, con la cámara ya actualizada.
+  updateRenderBudget(viewerPos, camera, dt) {
+    // Sombra solar centrada en el jugador, ajustada a la rejilla de texels para que los
+    // bordes de sombra no "tiemblen" al moverse.
+    if (viewerPos && this.sunLight) {
+      _viewerVec.set(viewerPos.x, viewerPos.y, viewerPos.z);
+      const t = this.shadowTexelSize;
+      const r = Math.round(_viewerVec.dot(_sunRight) / t) * t;
+      const u = Math.round(_viewerVec.dot(_sunUp) / t) * t;
+      const f = _viewerVec.dot(_sunDir);
+      _sunSnapped.copy(_sunRight).multiplyScalar(r)
+        .addScaledVector(_sunUp, u)
+        .addScaledVector(_sunDir, f);
+      this.sunLight.target.position.copy(_sunSnapped);
+      this.sunLight.position.copy(_sunSnapped).add(SUN_OFFSET);
+    }
+
+    if (!camera) return;
+
+    // Candidatas: luces visibles cuya esfera de alcance toca el campo de visión.
+    // Una luz fuera de esa esfera no aporta nada a ningún píxel en pantalla.
+    camera.updateMatrixWorld();
+    _projView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    _frustum.setFromProjectionMatrix(_projView);
+    const candidates = this.lightCandidates;
+    candidates.length = 0;
+    for (let i = 0; i < this.lightAnchors.length; i++) {
+      const a = this.lightAnchors[i];
+      if (!isVisibleInScene(a)) continue;
+      const wp = a.getWorldPosition(a.userData.worldPos);
+      _lightSphere.set(wp, a.userData.light.distance);
+      if (!_frustum.intersectsSphere(_lightSphere)) continue;
+      a.userData.lightScore = wp.distanceToSquared(camera.position);
+      candidates.push(a);
+    }
+    // Solo si hay más candidatas que luces se elige por cercanía y se funde el cambio;
+    // si caben todas, entran a plena intensidad (idéntico a tenerlas siempre encendidas).
+    const contested = candidates.length > MAX_ACTIVE_POINT_LIGHTS;
+    if (contested) {
+      candidates.sort(this.compareLightCandidates);
+      candidates.length = MAX_ACTIVE_POINT_LIGHTS;
+    }
+
+    const slots = this.pointLightSlots;
+    const step = Math.min(1, dt * POINT_LIGHT_FADE_RATE);
+    // 1) Atenuar las luces que ya no están entre las elegidas
+    for (let i = 0; i < slots.length; i++) {
+      const slot = slots[i];
+      if (slot.anchor && !candidates.includes(slot.anchor)) {
+        // Sin competencia, la luz salió del campo de visión: liberarla al instante no cambia nada en pantalla
+        slot.weight -= contested ? step : 1;
+        if (slot.weight <= 0) {
+          slot.weight = 0;
+          slot.anchor = null;
+        }
+      }
+    }
+    // 2) Asignar las elegidas nuevas a ranuras libres
+    for (let i = 0; i < candidates.length; i++) {
+      const a = candidates[i];
+      let assigned = false;
+      for (let j = 0; j < slots.length; j++) {
+        if (slots[j].anchor === a) { assigned = true; break; }
+      }
+      if (assigned) continue;
+      for (let j = 0; j < slots.length; j++) {
+        if (!slots[j].anchor) {
+          slots[j].anchor = a;
+          slots[j].weight = contested ? 0 : 1;
+          break;
+        }
+      }
+    }
+    // 3) Aplicar posición, color e intensidad
+    for (let i = 0; i < slots.length; i++) {
+      const slot = slots[i];
+      const light = slot.light;
+      if (!slot.anchor) {
+        light.intensity = 0;
+        continue;
+      }
+      if (candidates.includes(slot.anchor)) slot.weight = Math.min(1, slot.weight + step);
+      const cfg = slot.anchor.userData.light;
+      if (!isVisibleInScene(slot.anchor)) {
+        slot.anchor = null;
+        slot.weight = 0;
+        light.intensity = 0;
+        continue;
+      }
+      slot.anchor.getWorldPosition(light.position);
+      light.color.copy(cfg.color);
+      light.distance = cfg.distance;
+      light.decay = cfg.decay;
+      light.intensity = cfg.intensity * slot.weight;
+    }
+  }
+
   initLightingInstancedCloudsAndPools() {
     this.scene.background = this.clearSkyColor.clone();
     this.scene.fog = new THREE.FogExp2(this.clearFogColor.clone(), 0.00155);
@@ -966,6 +1119,18 @@ export class VoxelWorld {
     this.sunLight.shadow.normalBias = 0.032;
     this.scene.add(this.sunLight);
     this.scene.add(this.sunLight.target);
+    this.shadowTexelSize = (shadowHalf * 2) / this.sunLight.shadow.mapSize.x;
+
+    // Pool fijo de luces puntuales que se reparten entre los "anclajes" de luz del mapa
+    this.lightAnchors = [];
+    this.lightCandidates = [];
+    this.pointLightSlots = [];
+    for (let i = 0; i < MAX_ACTIVE_POINT_LIGHTS; i++) {
+      const light = new THREE.PointLight('#ffffff', 0, 1, 2);
+      this.scene.add(light);
+      this.pointLightSlots.push({ light, anchor: null, weight: 0 });
+    }
+    this.compareLightCandidates = (a, b) => a.userData.lightScore - b.userData.lightScore;
 
     // Nubes Volumétricas Low-Poly agrupadas en UN SOLO THREE.InstancedMesh
     const cloudRng = createRNG(88421);
@@ -1129,6 +1294,7 @@ export class VoxelWorld {
     this.clearGroup(this.foliageGroup);
     this.doorVisuals.clear();
     this.windowVisuals.clear();
+    this.resetMapLightAnchors();
     this.planeInitialized = false;
     this.lastPlaneServerRef = null;
 
@@ -1219,10 +1385,40 @@ export class VoxelWorld {
       vertexColors: true,
       gradientMap: getSharedToonGradient()
     });
-    const terrainMesh = new THREE.Mesh(geo, terrainMat);
-    terrainMesh.castShadow = true;
-    terrainMesh.receiveShadow = true;
-    this.terrainGroup.add(terrainMesh);
+    // Terreno en bloques de 80 m que comparten los mismos atributos (posición, normal, color):
+    // misma malla y mismas normales que antes, pero la cámara y la sombra solar descartan los
+    // bloques fuera de su volumen en vez de procesar los ~205k triángulos completos.
+    const fullIndex = geo.index.array;
+    const posArr = geo.attributes.position.array;
+    for (let cz0 = 0; cz0 < GRID_SIZE; cz0 += TERRAIN_CHUNK_CELLS) {
+      for (let cx0 = 0; cx0 < GRID_SIZE; cx0 += TERRAIN_CHUNK_CELLS) {
+        const czEnd = Math.min(GRID_SIZE, cz0 + TERRAIN_CHUNK_CELLS);
+        const cxEnd = Math.min(GRID_SIZE, cx0 + TERRAIN_CHUNK_CELLS);
+        const chunkIndex = new Uint32Array((czEnd - cz0) * (cxEnd - cx0) * 6);
+        const box = new THREE.Box3();
+        let k = 0;
+        for (let iy = cz0; iy < czEnd; iy++) {
+          for (let ix = cx0; ix < cxEnd; ix++) {
+            const base = (iy * GRID_SIZE + ix) * 6; // PlaneGeometry: 6 índices por celda
+            for (let n = 0; n < 6; n++) {
+              const vi = fullIndex[base + n];
+              chunkIndex[k++] = vi;
+              _tmpVecA.set(posArr[vi * 3], posArr[vi * 3 + 1], posArr[vi * 3 + 2]);
+              box.expandByPoint(_tmpVecA);
+            }
+          }
+        }
+        const chunkGeo = new THREE.BufferGeometry();
+        for (const name of Object.keys(geo.attributes)) chunkGeo.setAttribute(name, geo.attributes[name]);
+        chunkGeo.setIndex(new THREE.BufferAttribute(chunkIndex, 1));
+        chunkGeo.boundingBox = box;
+        chunkGeo.boundingSphere = box.getBoundingSphere(new THREE.Sphere());
+        const chunkMesh = new THREE.Mesh(chunkGeo, terrainMat);
+        chunkMesh.castShadow = true;
+        chunkMesh.receiveShadow = true;
+        this.terrainGroup.add(chunkMesh);
+      }
+    }
 
     const segs = 220;
     const riverPositions = [];
@@ -1451,9 +1647,7 @@ export class VoxelWorld {
       hull.add(blade);
     }
 
-    const fireLight = new THREE.PointLight('#ff6b00', 1.85, 16, 1.6);
-    fireLight.position.set(0, 1.6, -0.6);
-    hull.add(fireLight);
+    this.addLightAnchor(hull, '#ff6b00', 1.85, 16, 1.6, 0, 1.6, -0.6);
     this.structuresGroup.add(hull);
 
     // Sección 2: Cola separada del helicóptero a varios metros
@@ -1678,9 +1872,7 @@ export class VoxelWorld {
         crys.position.set(cxOff, 0.55, czOff);
         g.add(crys);
       }
-      const caveLight = new THREE.PointLight('#fbbf24', 1.45, 18, 1.6);
-      caveLight.position.set(0, 2.9, -1.2);
-      g.add(caveLight);
+      this.addLightAnchor(g, '#fbbf24', 1.45, 18, 1.6, 0, 2.9, -1.2);
 
       this.structuresGroup.add(g);
     }
@@ -1972,9 +2164,7 @@ export class VoxelWorld {
       // Iluminación interior cálida en las casas principales del pueblo
       if (warmHouseLights < 6) {
         warmHouseLights++;
-        const warmLight = new THREE.PointLight('#ffcf75', 1.15, 13.5, 1.7);
-        warmLight.position.set(b.x, b.floorY + 2.75, b.z);
-        g.add(warmLight);
+        this.addLightAnchor(g, '#ffcf75', 1.15, 13.5, 1.7, b.x, b.floorY + 2.75, b.z);
       }
 
       this.structuresGroup.add(g);
@@ -2043,6 +2233,138 @@ export class VoxelWorld {
       this.structuresGroup.add(wg);
       this.windowVisuals.set(w.id, { data: w, group: wg });
     }
+
+    this.mergeStaticStructures();
+  }
+
+  // Fusiona las piezas estáticas de las estructuras (muros, techos, escalones, barandas, cimientos,
+  // monumento, restos del helicóptero...) que comparten material y banderas de sombra, agrupadas por
+  // zonas de 64 m. Los triángulos, materiales y sombras son exactamente los mismos; solo cambia que
+  // se envían en muchas menos llamadas de dibujo. Puertas, ventanas, piezas transparentes, ocultas
+  // o con lógica propia quedan intactas.
+  mergeStaticStructures() {
+    const root = this.structuresGroup;
+    const keepRoots = new Set();
+    for (const entry of this.doorVisuals.values()) keepRoots.add(entry.pivot);
+    for (const entry of this.windowVisuals.values()) keepRoots.add(entry.group);
+    for (const anchor of this.lightAnchors) keepRoots.add(anchor);
+
+    root.updateMatrixWorld(true);
+    const rootInverse = new THREE.Matrix4().copy(root.matrixWorld).invert();
+    const defaultOnBeforeRender = THREE.Object3D.prototype.onBeforeRender;
+    const CELL = 64;
+
+    const buckets = new Map();
+    const visit = (obj, chainVisible) => {
+      if (keepRoots.has(obj)) return;
+      const visible = chainVisible && obj.visible;
+      for (let i = 0; i < obj.children.length; i++) visit(obj.children[i], visible);
+      if (!obj.isMesh || obj.isInstancedMesh || obj.isSkinnedMesh || !visible) return;
+      const mat = obj.material;
+      const geo = obj.geometry;
+      if (!mat || Array.isArray(mat) || mat.transparent) return;
+      if (obj.onBeforeRender !== defaultOnBeforeRender || obj.userData.keepSeparate) return;
+      // (los grupos de la geometría solo importan con materiales en arreglo, ya excluidos arriba)
+      if (!geo.attributes.position || geo.morphAttributes.position) return;
+      const names = Object.keys(geo.attributes).sort();
+      for (const n of names) if (geo.attributes[n].isInterleavedBufferAttribute) return;
+      const signature = names.map((n) => n + geo.attributes[n].itemSize).join(',');
+      const e = obj.matrixWorld.elements;
+      const cell = Math.floor(e[12] / CELL) + ':' + Math.floor(e[14] / CELL);
+      const key = [cell, mat.uuid, obj.castShadow, obj.receiveShadow, obj.renderOrder, obj.frustumCulled, signature].join('|');
+      let bucket = buckets.get(key);
+      if (!bucket) {
+        bucket = { material: mat, names, meshes: [], castShadow: obj.castShadow, receiveShadow: obj.receiveShadow, renderOrder: obj.renderOrder, frustumCulled: obj.frustumCulled };
+        buckets.set(key, bucket);
+      }
+      bucket.meshes.push(obj);
+    };
+    visit(root, true);
+
+    const toMatrix = new THREE.Matrix4();
+    for (const bucket of buckets.values()) {
+      if (bucket.meshes.length < 2) continue;
+
+      // Pasar cada pieza a triángulos sueltos en coordenadas del grupo raíz
+      const parts = [];
+      let vertexCount = 0;
+      for (const mesh of bucket.meshes) {
+        const g = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
+        toMatrix.multiplyMatrices(rootInverse, mesh.matrixWorld);
+        g.applyMatrix4(toMatrix);
+        // Una escala en espejo invierte el sentido de los triángulos: restaurarlo
+        if (toMatrix.determinant() < 0) {
+          for (const n of bucket.names) {
+            const attr = g.attributes[n];
+            const size = attr.itemSize;
+            const arr = attr.array;
+            for (let v = 0; v < attr.count; v += 3) {
+              for (let c = 0; c < size; c++) {
+                const a = (v + 1) * size + c;
+                const b = (v + 2) * size + c;
+                const tmp = arr[a];
+                arr[a] = arr[b];
+                arr[b] = tmp;
+              }
+            }
+          }
+        }
+        parts.push(g);
+        vertexCount += g.attributes.position.count;
+      }
+
+      const merged = new THREE.BufferGeometry();
+      for (const n of bucket.names) {
+        const first = parts[0].attributes[n];
+        const out = new first.array.constructor(vertexCount * first.itemSize);
+        let offset = 0;
+        for (const g of parts) {
+          out.set(g.attributes[n].array, offset);
+          offset += g.attributes[n].array.length;
+        }
+        merged.setAttribute(n, new THREE.BufferAttribute(out, first.itemSize, first.normalized));
+      }
+      merged.computeBoundingBox();
+      merged.computeBoundingSphere();
+      for (const g of parts) g.dispose();
+
+      const mergedMesh = new THREE.Mesh(merged, bucket.material);
+      mergedMesh.castShadow = bucket.castShadow;
+      mergedMesh.receiveShadow = bucket.receiveShadow;
+      mergedMesh.renderOrder = bucket.renderOrder;
+      mergedMesh.frustumCulled = bucket.frustumCulled;
+      mergedMesh.matrixAutoUpdate = false;
+      mergedMesh.updateMatrix();
+
+      for (const mesh of bucket.meshes) {
+        mesh.removeFromParent();
+        if (!this.sharedGeometries.has(mesh.geometry)) mesh.geometry.dispose();
+      }
+      root.add(mergedMesh);
+    }
+
+    // Quitar los grupos que quedaron vacíos (menos objetos que recorrer cada fotograma)
+    const prune = (obj) => {
+      for (let i = obj.children.length - 1; i >= 0; i--) {
+        const child = obj.children[i];
+        prune(child);
+        if (child.children.length === 0 && !child.isMesh && !child.isLight && !keepRoots.has(child) &&
+          child.type === 'Group') {
+          child.removeFromParent();
+        }
+      }
+    };
+    prune(root);
+
+    // Las piezas estáticas restantes no necesitan recalcular su matriz cada fotograma
+    const freeze = (obj) => {
+      if (keepRoots.has(obj)) return;
+      obj.matrixAutoUpdate = false;
+      obj.updateMatrix();
+      for (let i = 0; i < obj.children.length; i++) freeze(obj.children[i]);
+    };
+    for (let i = 0; i < root.children.length; i++) freeze(root.children[i]);
+    root.updateMatrixWorld(true);
   }
 
   syncDoors(doorsList = []) {
@@ -2108,23 +2430,42 @@ export class VoxelWorld {
   buildInstancedEnvironment(map) {
     const addBatch = (list, geo, mat, castShadow = false, receiveShadow = false, yOffset = -0.03) => {
       if (!list || list.length === 0) return;
-      const inst = new THREE.InstancedMesh(geo, mat, list.length);
-      inst.frustumCulled = false;
-      inst.castShadow = castShadow;
-      inst.receiveShadow = receiveShadow;
 
+      // Repartir las instancias en bloques de 160 m, cada uno con su volumen envolvente,
+      // para que la cámara y la sombra solar descarten los bloques que no ven.
+      const tiles = new Map();
       for (let i = 0; i < list.length; i++) {
         const p = list[i];
-        _tmpVecA.set(p.x, p.y + yOffset, p.z);
-        _tmpEuler.set(0, p.rotY || 0, 0);
-        _tmpQuatA.setFromEuler(_tmpEuler);
-        const s = p.scale || 1;
-        _tmpScale.set(s, s, s);
-        _tmpMat4.compose(_tmpVecA, _tmpQuatA, _tmpScale);
-        inst.setMatrixAt(i, _tmpMat4);
+        const key = Math.floor((p.x + WORLD_HALF) / FOLIAGE_TILE_SIZE) * 1000 +
+          Math.floor((p.z + WORLD_HALF) / FOLIAGE_TILE_SIZE);
+        let tile = tiles.get(key);
+        if (!tile) {
+          tile = [];
+          tiles.set(key, tile);
+        }
+        tile.push(p);
       }
-      inst.instanceMatrix.needsUpdate = true;
-      this.foliageGroup.add(inst);
+
+      for (const tile of tiles.values()) {
+        const inst = new THREE.InstancedMesh(geo, mat, tile.length);
+        inst.castShadow = castShadow;
+        inst.receiveShadow = receiveShadow;
+
+        for (let i = 0; i < tile.length; i++) {
+          const p = tile[i];
+          _tmpVecA.set(p.x, p.y + yOffset, p.z);
+          _tmpEuler.set(0, p.rotY || 0, 0);
+          _tmpQuatA.setFromEuler(_tmpEuler);
+          const s = p.scale || 1;
+          _tmpScale.set(s, s, s);
+          _tmpMat4.compose(_tmpVecA, _tmpQuatA, _tmpScale);
+          inst.setMatrixAt(i, _tmpMat4);
+        }
+        inst.instanceMatrix.needsUpdate = true;
+        inst.computeBoundingSphere();
+        inst.boundingSphere.radius += FOLIAGE_BOUNDS_PADDING;
+        this.foliageGroup.add(inst);
+      }
     };
 
     const allCoffeeSacks = [...(map.props.coffeeSacks || [])];
@@ -2234,9 +2575,8 @@ export class VoxelWorld {
     windshield.position.set(0, 0.85, 7.5);
     g.add(noseCone, windshield);
 
-    const cabinLight = new THREE.PointLight('#fde68a', 1.3, 14);
-    cabinLight.position.set(0, 1.2, -0.8);
-    g.add(cabinLight);
+    // Luz de cabina: persistente (el avión no se reconstruye con el mapa)
+    this.addLightAnchor(g, '#fde68a', 1.3, 14, 2, 0, 1.2, -0.8, true);
 
     const wingY = new THREE.Mesh(new THREE.BoxGeometry(22, 0.32, 3.2), yellowMat);
     wingY.position.set(0, 1.85, 1.0);
@@ -2829,11 +3169,8 @@ export class VoxelWorld {
     this.windUniform.value = timeSec;
     this.waterTexture.offset.y -= dt * 0.44;
 
-    // Frustum de sombras 2048x2048 siguiendo dinámicamente al jugador local
-    if (viewerPos && this.sunLight) {
-      this.sunLight.target.position.set(viewerPos.x, viewerPos.y, viewerPos.z);
-      this.sunLight.position.set(viewerPos.x + 68, viewerPos.y + 118, viewerPos.z + 52);
-    }
+    // El sol (frustum de sombras) y las luces puntuales se actualizan en updateRenderBudget(),
+    // que main.js llama justo antes de renderizar, ya con la cámara del fotograma.
 
     // Humo oscuro ascendente, llamas y chispas del Helicóptero Estrellado reciclados por Object Pooling
     if (this.mapData && this.mapData.helicopterWreck) {

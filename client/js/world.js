@@ -92,7 +92,7 @@ function mergeOrganicParts(parts) {
   const v = new THREE.Vector3();
 
   for (const p of parts) {
-    let baseGeo = p.geo;
+    const baseGeo = p.geo;
     if (!baseGeo.attributes.normal) baseGeo.computeVertexNormals();
     const nonIdx = baseGeo.index ? baseGeo.toNonIndexed() : baseGeo;
 

@@ -9,6 +9,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
 import { GameRoom } from './gameRoom.js';
+import { RateLimiter, sanitizers } from './validation.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -68,78 +69,44 @@ io.on('connection', (socket) => {
   socket.emit('network_info', { port: PORT, lanUrls: lanList });
   room.broadcastLobbyState();
 
-  socket.on('join_lobby', (payload = {}) => {
-    const p = room.addHumanPlayer(socket, payload.name);
+  const limiter = new RateLimiter();
+
+  // Registra un evento: aplica límite de frecuencia, sanitiza el payload y aísla errores
+  // para que un mensaje malformado nunca tumbe el servidor.
+  const on = (event, handler) => {
+    const sanitize = sanitizers[event];
+    socket.on(event, (raw) => {
+      if (!limiter.allow(event)) return;
+      const payload = sanitize ? sanitize(raw) : undefined;
+      if (sanitize && payload === null) return;
+      try {
+        handler(payload);
+      } catch (err) {
+        console.error(`[${event}] error procesando mensaje de ${socket.id}:`, err);
+      }
+    });
+  };
+
+  on('join_lobby', ({ name }) => {
+    const p = room.addHumanPlayer(socket, name);
     socket.emit('lobby_joined', { selfId: p.id, phase: room.phase });
   });
-
-  socket.on('configure_bots', (payload = {}) => {
-    room.configureBots(payload);
-  });
-
-  socket.on('add_bot', () => {
-    room.addBot();
-  });
-
-  socket.on('clear_bots', () => {
-    room.clearBots();
-  });
-
-  socket.on('start_game', (payload = {}) => {
-    room.startGame({
-      autoFillBots: Boolean(payload.autoFillBots),
-      botCount: typeof payload.botCount === 'number' ? payload.botCount : undefined,
-      botDifficulty: payload.botDifficulty
-    });
-  });
-
-  socket.on('player_jump', () => {
-    room.handlePlayerJump(socket.id);
-  });
-
-  socket.on('player_input', (payload = {}) => {
-    room.handlePlayerInput(socket.id, payload);
-  });
-
-  socket.on('player_slide', (payload = {}) => {
-    room.handlePlayerSlide(socket.id, payload);
-  });
-
-  socket.on('player_shoot', (payload = {}) => {
-    room.handleShoot(socket.id, payload);
-  });
-
-  socket.on('player_reload', () => {
-    room.handleReload(socket.id);
-  });
-
-  socket.on('player_switch_weapon', (payload = {}) => {
-    if (payload.weapon) room.handleSwitchWeapon(socket.id, payload.weapon);
-  });
-
-  socket.on('player_heal', (payload = {}) => {
-    room.handleHeal(socket.id, payload.itemType || 'medkit');
-  });
-
-  socket.on('player_cancel_heal', () => {
-    room.handleCancelHeal(socket.id);
-  });
-
-  socket.on('player_pickup', (payload = {}) => {
-    if (payload.lootId) room.handlePickup(socket.id, payload.lootId);
-  });
-
-  socket.on('player_interact_door', (payload = {}) => {
-    if (payload.doorId) room.handleInteractDoor(socket.id, payload.doorId);
-  });
-
-  socket.on('player_break_window', (payload = {}) => {
-    if (payload.windowId) room.handleBreakWindow(socket.id, payload.windowId);
-  });
-
-  socket.on('reset_lobby', () => {
-    room.resetToLobby(false);
-  });
+  on('configure_bots', (cfg) => room.configureBots(cfg));
+  on('add_bot', () => room.addBot());
+  on('clear_bots', () => room.clearBots());
+  on('start_game', (opts) => room.startGame(opts));
+  on('player_jump', () => room.handlePlayerJump(socket.id));
+  on('player_input', (data) => room.handlePlayerInput(socket.id, data));
+  on('player_slide', (data) => room.handlePlayerSlide(socket.id, data));
+  on('player_shoot', (data) => room.handleShoot(socket.id, data));
+  on('player_reload', () => room.handleReload(socket.id));
+  on('player_switch_weapon', ({ weapon }) => room.handleSwitchWeapon(socket.id, weapon));
+  on('player_heal', ({ itemType }) => room.handleHeal(socket.id, itemType));
+  on('player_cancel_heal', () => room.handleCancelHeal(socket.id));
+  on('player_pickup', ({ lootId }) => room.handlePickup(socket.id, lootId));
+  on('player_interact_door', ({ doorId }) => room.handleInteractDoor(socket.id, doorId));
+  on('player_break_window', ({ windowId }) => room.handleBreakWindow(socket.id, windowId));
+  on('reset_lobby', () => room.resetToLobby(false));
 
   socket.on('disconnect', () => {
     room.removePlayer(socket.id);

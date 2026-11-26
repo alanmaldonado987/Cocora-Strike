@@ -5,6 +5,7 @@
 // - Liberación completa de memoria WebGL (avatar.dispose) al desconectarse o reiniciar partida
 // - Soporte para animación canalizada de curación (2.0s) con partículas verdes ascendentes
 
+import { CABIN_DISEMBARK_MS } from '/shared/mapData.js';
 import { createVoxelAvatar } from './player.js';
 import { ServerClock, SnapshotBuffer, createSampleOut } from './interpolation.js';
 
@@ -62,6 +63,15 @@ export class NetworkManager {
 
     s.on('player_slid', (data) => {
       this.callbacks.onPlayerSlid?.(data);
+    });
+
+    s.on('player_cabin_disembark', (data) => {
+      const entry = this.remotePlayers.get(data?.playerId);
+      if (entry) {
+        entry.cabinDisembarking = true;
+        entry.localCabinProg = Math.max(entry.localCabinProg || 0.01, 0.01);
+      }
+      this.callbacks.onPlayerCabinDisembark?.(data);
     });
 
     s.on('loot_picked', (data) => {
@@ -153,7 +163,7 @@ export class NetworkManager {
 
     for (const [id, entry] of this.remotePlayers.entries()) {
       if (!activeIds.has(id)) {
-        this.scene.remove(entry.avatar.root);
+        entry.avatar.root.removeFromParent();
         entry.avatar.dispose?.();
         this.remotePlayers.delete(id);
       }
@@ -176,6 +186,9 @@ export class NetworkManager {
           hp: pData.hp ?? 100,
           maxHp: pData.maxHp ?? 100,
           seatIndex: pData.seatIndex || 0,
+          cabinDisembarking: (pData.cabinProgress || 0) > 0,
+          serverCabinProg: pData.cabinProgress || 0,
+          localCabinProg: pData.cabinProgress || 0,
           buffer: new SnapshotBuffer(),
           yaw: pData.yaw || 0,
           pitch: pData.pitch || 0,
@@ -183,9 +196,11 @@ export class NetworkManager {
           moveMode: pData.moveMode || 'idle',
           isSliding: Boolean(pData.isSliding),
           isCrouching: Boolean(pData.isCrouching),
+          isSwimming: Boolean(pData.isSwimming),
           isHealing: Boolean(pData.isHealing),
           dustAccum: 0,
           healPartAccum: 0,
+          waterRippleAccum: 0,
           state: pData.state,
           equipped: pData.equipped,
           alive: pData.alive,
@@ -195,6 +210,8 @@ export class NetworkManager {
       } else {
         // Datos que deben reflejarse al instante (vida, muerte, arma, asiento)
         entry.seatIndex = pData.seatIndex ?? entry.seatIndex;
+        entry.serverCabinProg = pData.cabinProgress || 0;
+        if (entry.serverCabinProg > 0) entry.cabinDisembarking = true;
         entry.hp = pData.hp ?? entry.hp;
         entry.maxHp = pData.maxHp ?? entry.maxHp;
         entry.avatar.setHealth(entry.hp, entry.maxHp);
@@ -215,6 +232,7 @@ export class NetworkManager {
     entry.moveMode = data.moveMode || 'idle';
     entry.isSliding = Boolean(data.isSliding);
     entry.isCrouching = Boolean(data.isCrouching);
+    entry.isSwimming = Boolean(data.isSwimming);
     entry.isHealing = Boolean(data.isHealing);
     entry.state = data.state;
   }
@@ -223,6 +241,8 @@ export class NetworkManager {
     const renderTime = this.serverClock.renderTime(performance.now());
     this.lastRenderTime = renderTime; // se envía con cada disparo (compensación de latencia)
 
+    // Desacoplamiento Simulación vs Renderizado: interpola posiciones y fases de animación de TODOS los
+    // jugadores remotos y bots en cada fotograma sin ningún filtro de cámara o frustum (el GPU aplica frustumCulled).
     for (const entry of this.remotePlayers.values()) {
       const hasSample = entry.buffer.sample(renderTime, _sample);
       if (hasSample) this.applySampledPose(entry, _sample.data);
@@ -234,25 +254,51 @@ export class NetworkManager {
 
       if (entry.state === 'plane') {
         if (planeState && planeState.active && worldInstance) {
+          const bayGroup = worldInstance.getActiveCabinBayGroup();
+          if (bayGroup && entry.avatar.root.parent !== bayGroup) {
+            bayGroup.add(entry.avatar.root);
+          }
+          if (entry.cabinDisembarking) {
+            entry.localCabinProg = Math.min(
+              1,
+              Math.max(entry.localCabinProg || 0, entry.serverCabinProg || 0) + dt / (CABIN_DISEMBARK_MS / 1000)
+            );
+          } else {
+            entry.localCabinProg = 0;
+          }
+          const localPose = worldInstance.sampleCabinDisembarkLocalPose(entry.seatIndex, entry.localCabinProg);
           entry.avatar.root.visible = true;
-          const seat = worldInstance.getCabinSeatTransform(entry.seatIndex);
-          entry.avatar.root.position.set(seat.x, seat.y, seat.z);
-          entry.avatar.root.rotation.set(seat.pitch || 0, seat.yaw, seat.roll || 0);
+          entry.avatar.root.position.set(localPose.x, localPose.y, localPose.z);
+          entry.avatar.root.rotation.set(0, localPose.yaw, 0);
           entry.avatar.setWeapon(entry.equipped);
-          entry.avatar.animate(0, 'plane', entry.equipped, 0, 'seated', dt, false, false, false);
+          const cabinMode = localPose.phase === 'sit' ? 'seated' : localPose.phase;
+          entry.avatar.animate(localPose.walkCycle, 'plane', entry.equipped, 0, cabinMode, dt, false, false, false);
         } else {
           entry.avatar.root.visible = false;
         }
         continue;
       }
 
-      if (!hasSample) continue;
-      // Posición y orientación interpoladas entre los snapshots que rodean renderTime
-      entry.yaw = _sample.yaw;
-      entry.avatar.root.position.set(_sample.x, _sample.y, _sample.z);
+      // Al desacoplarse de la rampa hacia skydiving/ground, reanclar el avatar al espacio global de la escena
+      entry.cabinDisembarking = false;
+      entry.localCabinProg = 0;
+      if (entry.avatar.root.parent !== this.scene) {
+        this.scene.add(entry.avatar.root);
+      }
+
+      if (hasSample) {
+        // Posición y orientación interpoladas entre los snapshots que rodean renderTime
+        entry.yaw = _sample.yaw;
+        entry.avatar.root.position.set(_sample.x, _sample.y, _sample.z);
+      }
 
       if (mapData) {
-        const minG = mapData.getGroundHeightAt(_sample.x, _sample.z, _sample.y);
+        const curX = entry.avatar.root.position.x;
+        const curY = entry.avatar.root.position.y;
+        const curZ = entry.avatar.root.position.z;
+        const minG = mapData.getTerrainHeightAt
+          ? mapData.getTerrainHeightAt(curX, curZ)
+          : mapData.getGroundHeightAt(curX, curZ, curY);
         if (entry.avatar.root.position.y < minG) {
           entry.avatar.root.position.y = minG;
         }
@@ -261,17 +307,35 @@ export class NetworkManager {
       entry.avatar.root.visible = true;
       entry.avatar.root.rotation.set(0, entry.yaw, 0);
       entry.avatar.setWeapon(entry.equipped);
+      const effectiveMode =
+        entry.isSwimming && entry.moveMode !== 'swim' && entry.moveMode !== 'swim_fast' && entry.moveMode !== 'swim_idle'
+          ? 'swim'
+          : entry.moveMode;
       entry.avatar.animate(
         entry.animWalk,
         entry.state,
         entry.equipped,
         entry.pitch,
-        entry.moveMode,
+        effectiveMode,
         dt,
         entry.isSliding,
         entry.isCrouching,
         entry.isHealing
       );
+
+      if ((entry.isSwimming || effectiveMode === 'swim' || effectiveMode === 'swim_fast' || effectiveMode === 'swim_idle') && worldInstance) {
+        const swimMoving = effectiveMode === 'swim' || effectiveMode === 'swim_fast';
+        entry.waterRippleAccum += dt;
+        if (entry.waterRippleAccum >= (swimMoving ? 0.14 : 0.34)) {
+          entry.waterRippleAccum = 0;
+          worldInstance.spawnWaterRipples?.(
+            entry.avatar.root.position.x,
+            entry.avatar.root.position.z,
+            swimMoving,
+            0.8
+          );
+        }
+      }
 
       if (entry.isSliding && worldInstance) {
         entry.dustAccum += dt;
@@ -316,7 +380,7 @@ export class NetworkManager {
 
   clearRemoteAvatars() {
     for (const entry of this.remotePlayers.values()) {
-      this.scene.remove(entry.avatar.root);
+      entry.avatar.root.removeFromParent();
       entry.avatar.dispose?.();
     }
     this.remotePlayers.clear();
@@ -341,6 +405,7 @@ export class NetworkManager {
       moveMode: localPlayer.moveMode,
       isSliding: localPlayer.isSliding,
       isCrouching: localPlayer.isCrouching,
+      isSwimming: Boolean(localPlayer.isSwimming),
       isVaulting: Boolean(localPlayer.isVaulting)
     });
   }

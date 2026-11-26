@@ -8,7 +8,8 @@
   <script type="importmap">
     {
       "imports": {
-        "three": "/vendor/three/three.module.js"
+        "three": "/vendor/three/three.module.js",
+        "three/addons/": "/vendor/three-addons/"
       }
     }
   </script>
@@ -93,6 +94,14 @@
               <option value="8">8 Bots (Máximo)</option>
             </select>
           </div>
+          <div class="config-field">
+            <label for="aircraft-type-select">✈️ Aeronave de Desembarco</label>
+            <select id="aircraft-type-select">
+              <option value="auto" selected>Alternar (AC-130J / CH-47F)</option>
+              <option value="ac130">AC-130J Ghostrider</option>
+              <option value="ch47">CH-47F Chinook</option>
+            </select>
+          </div>
         </div>
 
         <ul id="lobby-players-list" class="players-grid"></ul>
@@ -117,7 +126,7 @@
         <div><kbd>Shift+W+C</kbd> Derrape</div>
         <div><kbd>Clic Izq</kbd> Disparar</div>
         <div><kbd>Clic Der</kbd> Mira / Zoom</div>
-        <div><kbd>1</kbd>–<kbd>5</kbd> Armas</div>
+        <div><kbd>1</kbd>–<kbd>7</kbd> Armas</div>
         <div><kbd>R</kbd> Recargar</div>
         <div><kbd>H</kbd> Botiquín (2s)</div>
         <div><kbd>G</kbd>/<kbd>Q</kbd> Venda (2s)</div>
@@ -276,21 +285,29 @@
           <span class="slot-key">1</span>
           <span class="slot-name">9mm</span>
         </div>
-        <div id="slot-shotgun" class="w-slot locked">
+        <div id="slot-revolver" class="w-slot locked">
           <span class="slot-key">2</span>
+          <span class="slot-name">.357</span>
+        </div>
+        <div id="slot-shotgun" class="w-slot locked">
+          <span class="slot-key">3</span>
           <span class="slot-name">12G</span>
         </div>
         <div id="slot-smg" class="w-slot locked">
-          <span class="slot-key">3</span>
-          <span class="slot-name">SMG</span>
+          <span class="slot-key">4</span>
+          <span class="slot-name">MP-9</span>
+        </div>
+        <div id="slot-assault-rifle" class="w-slot locked">
+          <span class="slot-key">5</span>
+          <span class="slot-name">M4-T</span>
         </div>
         <div id="slot-rifle" class="w-slot locked">
-          <span class="slot-key">4</span>
-          <span class="slot-name">AK-47</span>
+          <span class="slot-key">6</span>
+          <span class="slot-name">AK-M</span>
         </div>
         <div id="slot-sniper" class="w-slot locked">
-          <span class="slot-key">5</span>
-          <span class="slot-name">Sniper</span>
+          <span class="slot-key">7</span>
+          <span class="slot-name">.338</span>
         </div>
       </div>
     </div>

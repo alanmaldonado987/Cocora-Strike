@@ -2,7 +2,7 @@ import js from '@eslint/js';
 import globals from 'globals';
 
 export default [
-  { ignores: ['node_modules/**'] },
+  { ignores: ['node_modules/**', 'Modelos 3D/*/**'] },
   js.configs.recommended,
   {
     files: ['**/*.js'],
@@ -22,7 +22,7 @@ export default [
     languageOptions: { globals: globals.node }
   },
   {
-    files: ['client/**/*.js'],
+    files: ['client/**/*.js', 'Modelos 3D/**/*.js'],
     languageOptions: { globals: { ...globals.browser, io: 'readonly' } }
   },
   {

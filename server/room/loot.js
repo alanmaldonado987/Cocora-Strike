@@ -17,12 +17,14 @@ export const lootMethods = {
 
     const randomLootType = () => {
       const r = rng();
-      if (r < 0.16) return 'pistol';
-      if (r < 0.31) return 'shotgun';
-      if (r < 0.47) return 'smg';
-      if (r < 0.62) return 'rifle';
-      if (r < 0.70) return 'sniper';
-      if (r < 0.83) return 'ammo';
+      if (r < 0.12) return 'pistol';
+      if (r < 0.22) return 'revolver';
+      if (r < 0.34) return 'shotgun';
+      if (r < 0.46) return 'smg';
+      if (r < 0.56) return 'assault_rifle';
+      if (r < 0.65) return 'rifle';
+      if (r < 0.72) return 'sniper';
+      if (r < 0.84) return 'ammo';
       if (r < 0.92) return 'bandage';
       return 'medkit';
     };

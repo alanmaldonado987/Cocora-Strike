@@ -15,17 +15,50 @@ import {
   WORLD_SIZE,
   WORLD_HALF,
   WATER_LEVEL,
+  LAGOON_CONFIG,
   SURFACE,
   LOOT_TYPES,
   createRNG,
-  getRiverCenterWorldX,
+  getWaterChannelAt,
+  getWaterProfileAt,
   generateCocoraMap
 } from '/shared/mapData.js';
 import { createDetailedWeaponMesh, getSharedToonGradient } from './player.js';
 import { ServerClock, SnapshotBuffer, createSampleOut } from './interpolation.js';
 import { GroundCover } from './groundCover.js';
+import {
+  MODEL_TEX,
+  getColonialHouseMaterials,
+  buildColonialRoofTilesGeo,
+  buildColonialGablesGeo,
+  buildColonialRailingGeo,
+  buildColonialWindowGroup,
+  buildCleanStoneBridge,
+  createExternalWaxPalmPrototypeGeo,
+  createExternalCoffeeBushPrototypeGeo,
+  createExternalRockPrototypeGeo,
+  createRiverCobblePrototypeGeo,
+  createExternalFencePrototypeGeo,
+  createExternalMedkitLootMesh,
+  populateExternalBearModel,
+  populateExternalCondorModel,
+  populateExternalTapirModel,
+  buildExternalCocoraSignGroup
+} from '/Modelos%203D/cocoraModels.js';
+import {
+  isSharedArmasV1Geometry,
+  isSharedArmasV1Material
+} from '/Modelos%203D/armasV1.js';
+import {
+  isSharedAircraftGeometry,
+  isSharedAircraftMaterial
+} from '/Modelos%203D/avionesShared.js';
+import { buildAC130Transport } from '/Modelos%203D/ac130Transport.js';
+import { buildCH47Transport } from '/Modelos%203D/ch47Transport.js';
+import { buildAH64ApacheWreckSite } from '/Modelos%203D/ah64Wreck.js';
 
 const _wildSample = createSampleOut();
+const _occSphere = new THREE.Sphere();
 
 // Vectores, matrices y cuaterniones temporales reutilizables (CERO asignaciones por fotograma)
 const _tmpVecA = new THREE.Vector3();
@@ -35,6 +68,7 @@ const _tmpEuler = new THREE.Euler();
 const _tmpQuatA = new THREE.Quaternion();
 const _tmpQuatB = new THREE.Quaternion();
 const _tmpMat4 = new THREE.Matrix4();
+const _tmpInstColor = new THREE.Color();
 const _yAxis = new THREE.Vector3(0, 1, 0);
 
 // ==================== PRESUPUESTO DE RENDER (sin pérdida de calidad) ====================
@@ -282,113 +316,10 @@ function createFoamShaderMaterial(windUniform) {
   return mat;
 }
 
-// Prototipos unificados para todos los lotes de InstancedMesh (vegetación + coberturas + espuma + mobiliario Paisa + nubes)
+// Prototipos unificados para todos los lotes de InstancedMesh (modelos externos integrados + vegetación + mobiliario + nubes)
 function createAllInstancedPrototypes() {
-  // 1. Palma de Cera Esbelta y Frondosa (tronco curvo anillado + 16 frondas arqueadas)
-  const palmParts = [];
-  const segCount = 11;
-  const segH = 1.65;
-  for (let s = 0; s < segCount; s++) {
-    const t0 = s / segCount;
-    const t1 = (s + 1) / segCount;
-    const rBottom = 0.28 * (1 - t0 * 0.44);
-    const rTop = 0.28 * (1 - t1 * 0.44);
-    const curveX = Math.sin(t0 * 1.48) * 0.44;
-    palmParts.push({
-      geo: new THREE.CylinderGeometry(rTop, rBottom, segH + 0.04, 8),
-      x: curveX,
-      y: s * segH + segH * 0.5,
-      z: 0,
-      rz: -Math.cos(t0 * 1.48) * 0.035,
-      color: s % 2 === 0 ? '#e7eae3' : '#b7c0b3'
-    });
-    // Anillo foliar marcado característico de la Palma de Cera del Quindío
-    palmParts.push({
-      geo: new THREE.CylinderGeometry(rTop * 1.06, rTop * 1.06, 0.11, 8),
-      x: curveX,
-      y: (s + 0.92) * segH,
-      z: 0,
-      color: '#7c8779'
-    });
-  }
-  const crownX = Math.sin(1.48) * 0.44;
-  const crownY = segCount * segH;
-  palmParts.push({ geo: new THREE.CylinderGeometry(0.30, 0.20, 0.95, 8), x: crownX, y: crownY - 0.15, z: 0, color: '#2d6a4f' });
-  palmParts.push({ geo: new THREE.IcosahedronGeometry(0.48, 1), x: crownX, y: crownY + 0.25, z: 0, color: '#1b6b3a' });
-  for (const ang of [0.8, 2.9, 4.9]) {
-    palmParts.push({
-      geo: new THREE.DodecahedronGeometry(0.22, 0),
-      x: crownX + Math.sin(ang) * 0.40,
-      y: crownY - 0.30,
-      z: Math.cos(ang) * 0.40,
-      sy: 1.4,
-      color: '#d97706'
-    });
-  }
-  for (let c = 0; c < 4; c++) {
-    const cAng = (c / 4) * Math.PI * 2 + 0.3;
-    palmParts.push({
-      geo: new THREE.ConeGeometry(0.16, 1.8, 4),
-      x: crownX + Math.sin(cAng) * 0.13,
-      y: crownY + 1.0,
-      z: Math.cos(cAng) * 0.13,
-      rx: 0.16,
-      ry: cAng,
-      sx: 1.0,
-      sy: 1.0,
-      sz: 0.28,
-      color: '#52b788'
-    });
-  }
-  const tiers = [
-    { count: 6, angleOffset: 0.0, yOff: -0.05, arch1: 0.55, arch2: 1.08, arch3: 1.55, lenScale: 1.08, c1: '#1e6b38', c2: '#2d6a4f' },
-    { count: 6, angleOffset: 0.52, yOff: 0.22, arch1: 0.24, arch2: 0.68, arch3: 1.16, lenScale: 1.15, c1: '#2b9348', c2: '#40916c' },
-    { count: 4, angleOffset: 0.26, yOff: 0.48, arch1: -0.10, arch2: 0.30, arch3: 0.72, lenScale: 0.96, c1: '#40916c', c2: '#52b788' }
-  ];
-  for (const tier of tiers) {
-    for (let i = 0; i < tier.count; i++) {
-      const ang = (i / tier.count) * Math.PI * 2 + tier.angleOffset;
-      const dirX = Math.sin(ang);
-      const dirZ = Math.cos(ang);
-      const L = tier.lenScale;
-      palmParts.push({
-        geo: new THREE.ConeGeometry(0.36, 1.45 * L, 4),
-        x: crownX + dirX * 0.68 * L,
-        y: crownY + tier.yOff + Math.sin(-tier.arch1) * 0.35,
-        z: dirZ * 0.68 * L,
-        rx: Math.PI / 2 + tier.arch1,
-        ry: ang,
-        sx: 1.45,
-        sy: 1.0,
-        sz: 0.22,
-        color: tier.c1
-      });
-      palmParts.push({
-        geo: new THREE.ConeGeometry(0.34, 1.55 * L, 4),
-        x: crownX + dirX * 1.72 * L,
-        y: crownY + tier.yOff - tier.arch2 * 0.42,
-        z: dirZ * 1.72 * L,
-        rx: Math.PI / 2 + tier.arch2,
-        ry: ang,
-        sx: 1.55,
-        sy: 1.0,
-        sz: 0.20,
-        color: tier.c2
-      });
-      palmParts.push({
-        geo: new THREE.ConeGeometry(0.22, 1.35 * L, 4),
-        x: crownX + dirX * 2.68 * L,
-        y: crownY + tier.yOff - tier.arch3 * 0.68,
-        z: dirZ * 2.68 * L,
-        rx: Math.PI / 2 + tier.arch3,
-        ry: ang,
-        sx: 1.25,
-        sy: 1.0,
-        sz: 0.18,
-        color: tier.c1
-      });
-    }
-  }
+  // 1. Palma de Cera integrada desde "Modelos 3D/" (WaxPalm: tronco anillado + 18 frondas curvas con foliolos + frutos)
+  const waxPalmGeo = createExternalWaxPalmPrototypeGeo();
 
   // 2. Árbol Frondoso de Bosque de Niebla
   const treeParts = [
@@ -410,18 +341,8 @@ function createAllInstancedPrototypes() {
     { geo: perturbGeometry(new THREE.IcosahedronGeometry(0.58, 1), 0.15, 43), x: 0.08, y: 1.22, z: -0.12, color: '#40916c' }
   ];
 
-  // 4. Arbusto de Cafetal con abundantes granos rojos maduros
-  const coffeeParts = [
-    { geo: new THREE.CylinderGeometry(0.06, 0.09, 0.9, 6), x: 0, y: 0.45, z: 0, color: '#5c3a21' },
-    { geo: perturbGeometry(new THREE.IcosahedronGeometry(0.68, 1), 0.12, 9), x: 0, y: 0.78, z: 0, sy: 0.80, color: '#166534' },
-    { geo: perturbGeometry(new THREE.IcosahedronGeometry(0.50, 1), 0.12, 19), x: 0, y: 1.20, z: 0, sy: 0.84, color: '#15803d' },
-    { geo: new THREE.IcosahedronGeometry(0.095, 0), x: 0.54, y: 0.82, z: 0.22, color: '#dc2626' },
-    { geo: new THREE.IcosahedronGeometry(0.095, 0), x: -0.52, y: 0.76, z: -0.20, color: '#ef4444' },
-    { geo: new THREE.IcosahedronGeometry(0.09, 0), x: 0.18, y: 0.88, z: -0.54, color: '#dc2626' },
-    { geo: new THREE.IcosahedronGeometry(0.09, 0), x: -0.20, y: 1.18, z: 0.38, color: '#b91c1c' },
-    { geo: new THREE.IcosahedronGeometry(0.085, 0), x: 0.34, y: 1.15, z: -0.22, color: '#ef4444' },
-    { geo: new THREE.IcosahedronGeometry(0.085, 0), x: -0.36, y: 0.86, z: 0.42, color: '#dc2626' }
-  ];
+  // 4. Cafeto detallado integrado desde "Modelos 3D/" (CoffeeBush: ramas + hojas planas + cerezas rojas y verdes)
+  const coffeeBushGeo = createExternalCoffeeBushPrototypeGeo();
 
   // 5. Helecho Gigante
   const fernParts = [];
@@ -459,12 +380,8 @@ function createAllInstancedPrototypes() {
   grassParts.push({ geo: new THREE.DodecahedronGeometry(0.09, 0), x: 0.06, y: 0.82, z: 0.04, color: '#f43f5e' });
   grassParts.push({ geo: new THREE.DodecahedronGeometry(0.08, 0), x: -0.12, y: 0.74, z: -0.08, color: '#facc15' });
 
-  // 7. Peñascos Rocosos
-  const boulderParts = [
-    { geo: perturbGeometry(new THREE.DodecahedronGeometry(0.56, 1), 0.22, 71), x: 0, y: 0.36, z: 0, sy: 0.78, color: '#6b7280' },
-    { geo: perturbGeometry(new THREE.IcosahedronGeometry(0.40, 1), 0.20, 89), x: 0.26, y: 0.24, z: 0.18, sy: 0.75, color: '#4b5563' },
-    { geo: perturbGeometry(new THREE.DodecahedronGeometry(0.34, 0), 0.18, 103), x: -0.25, y: 0.22, z: -0.15, color: '#788290' }
-  ];
+  // 7. Peñascos Rocosos con musgo superior integrados desde "Modelos 3D/" (Rock / rockGeometry)
+  const rockGeo = createExternalRockPrototypeGeo();
 
   // 7B. Anillo de Espuma Blanca alrededor de rocas del cauce del río
   const riverFoamParts = [];
@@ -517,19 +434,8 @@ function createAllInstancedPrototypes() {
     { geo: new THREE.CylinderGeometry(0.52, 0.52, 0.12, 12), x: -0.1, y: 0.52, z: -0.74, rx: Math.PI / 2, color: '#47301e' }
   ];
 
-  // 12. Cerca Rural de Madera con Postes Sólidos de Piedra (fiel a la referencia)
-  const fenceParts = [
-    // 3 Pilares cuadrados de mampostería de piedra con remate superior
-    { geo: new THREE.BoxGeometry(0.32, 1.06, 0.32), x: -1.65, y: 0.53, z: 0, color: '#788290' },
-    { geo: new THREE.BoxGeometry(0.38, 0.10, 0.38), x: -1.65, y: 1.09, z: 0, color: '#5a6472' },
-    { geo: new THREE.BoxGeometry(0.32, 1.06, 0.32), x: 0, y: 0.53, z: 0, color: '#788290' },
-    { geo: new THREE.BoxGeometry(0.38, 0.10, 0.38), x: 0, y: 1.09, z: 0, color: '#5a6472' },
-    { geo: new THREE.BoxGeometry(0.32, 1.06, 0.32), x: 1.65, y: 0.53, z: 0, color: '#788290' },
-    { geo: new THREE.BoxGeometry(0.38, 0.10, 0.38), x: 1.65, y: 1.09, z: 0, color: '#5a6472' },
-    // Travesaños rústicos de madera
-    { geo: new THREE.BoxGeometry(3.55, 0.12, 0.08), x: 0, y: 0.84, z: 0, color: '#8f5b34' },
-    { geo: new THREE.BoxGeometry(3.55, 0.12, 0.08), x: 0, y: 0.44, z: 0, color: '#7c4d2b' }
-  ];
+  // 12. Cerca Rural con Postes de Madera y Pilares de Piedra Apilada integrada desde "Modelos 3D/" (Fence)
+  const fenceGeo = createExternalFencePrototypeGeo();
 
   // 13. Tronco Partido / Caído con veta interior detallada y musgo
   const fallenLogParts = [
@@ -591,19 +497,20 @@ function createAllInstancedPrototypes() {
   const cloudPuffGeo = perturbGeometry(new THREE.IcosahedronGeometry(1.0, 1), 0.15, 47);
 
   return {
-    waxPalms: mergeOrganicParts(palmParts),
+    waxPalms: waxPalmGeo,
     cloudTrees: mergeOrganicParts(treeParts),
     stealthBushes: mergeOrganicParts(stealthBushParts),
-    coffeeBushes: mergeOrganicParts(coffeeParts),
+    coffeeBushes: coffeeBushGeo,
     ferns: mergeOrganicParts(fernParts),
     tallGrass: mergeOrganicParts(grassParts),
-    boulders: mergeOrganicParts(boulderParts),
+    boulders: rockGeo,
+    riverCobbles: createRiverCobblePrototypeGeo(),
     riverFoam: mergeOrganicParts(riverFoamParts),
     stoneWalls: mergeOrganicParts(stoneWallParts),
     coffeeSacks: mergeOrganicParts(coffeeSackParts),
     barrels: mergeOrganicParts(barrelParts),
     woodenCarts: mergeOrganicParts(cartParts),
-    fences: mergeOrganicParts(fenceParts),
+    fences: fenceGeo,
     fallenLogs: mergeOrganicParts(fallenLogParts),
     interiorBed: mergeOrganicParts(bedParts),
     interiorTable: mergeOrganicParts(tableParts),
@@ -698,54 +605,14 @@ function createWildlifeModel(species) {
   const hpBarSprite = createAnimalHealthBarSprite();
   root.add(hpBarSprite);
 
+  let paws = null;
+  let wingOuterL = null;
+  let wingOuterR = null;
+
   if (species === 'bear') {
-    const furMat = registerMat('#1e1c1a');
-    const creamMat = registerMat('#f5ebd6');
-
-    const torso = new THREE.Mesh(new THREE.IcosahedronGeometry(0.62, 1), furMat);
-    torso.scale.set(0.98, 0.90, 1.58);
-    torso.position.set(0, 0.85, 0);
-    torso.castShadow = true;
-    torso.receiveShadow = true;
-    const chestPatch = new THREE.Mesh(new THREE.SphereGeometry(0.30, 8, 8), creamMat);
-    chestPatch.scale.set(1.0, 0.9, 0.45);
-    chestPatch.position.set(0, 0.74, 0.82);
-    bodyPivot.add(torso, chestPatch);
-
-    headPivot.position.set(0, 1.06, 0.78);
-    const skull = new THREE.Mesh(new THREE.IcosahedronGeometry(0.32, 1), furMat);
-    skull.position.z = 0.20;
-    skull.castShadow = true;
-    const snout = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.17, 0.25, 8), creamMat);
-    snout.rotation.x = Math.PI / 2;
-    snout.position.set(0, -0.05, 0.47);
-    for (const sx of [-0.11, 0.11]) {
-      const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.088, 0.088, 0.04, 10), creamMat);
-      ring.rotation.x = Math.PI / 2;
-      ring.position.set(sx, 0.05, 0.46);
-      const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.038, 6, 6), furMat);
-      pupil.position.set(sx, 0.05, 0.48);
-      const ear = new THREE.Mesh(new THREE.SphereGeometry(0.085, 7, 7), furMat);
-      ear.position.set(sx * 1.9, 0.25, 0.14);
-      headPivot.add(ring, pupil, ear);
-    }
-    headPivot.add(skull, snout);
-    bodyPivot.add(headPivot);
-
-    const makeLeg = (lx, lz) => {
-      const g = new THREE.Group();
-      g.position.set(lx, 0.58, lz);
-      const limb = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.13, 0.58, 8), furMat);
-      limb.position.y = -0.29;
-      limb.castShadow = true;
-      g.add(limb);
-      return g;
-    };
-    legFL.copy(makeLeg(0.30, 0.50));
-    legFR.copy(makeLeg(-0.30, 0.50));
-    legBL.copy(makeLeg(0.30, -0.50));
-    legBR.copy(makeLeg(-0.30, -0.50));
-    bodyPivot.add(legFL, legFR, legBL, legBR);
+    // Oso de Anteojos articulado integrado desde "Animación v2" (Bear.tsx: torso/grupa/cruz, babero y 4 zarpas con garras)
+    const bearBuilt = populateExternalBearModel({ bodyPivot, headPivot, legFL, legFR, legBL, legBR }, registerMat);
+    paws = bearBuilt.paws;
   } else if (species === 'jaguar') {
     const coatMat = registerMat('#d99326');
     const spotMat = registerMat('#291d12');
@@ -803,73 +670,20 @@ function createWildlifeModel(species) {
     bodyPivot.add(legFL, legFR, legBL, legBR);
     hpBarSprite.position.y = 1.45;
     alertSprite.position.y = 1.85;
-  } else if (species === 'capybara') {
-    const capyMat = registerMat('#8d5b3c');
-    const darkMat = registerMat('#3e2723');
-
-    const torso = new THREE.Mesh(new THREE.IcosahedronGeometry(0.32, 1), capyMat);
-    torso.scale.set(0.88, 0.85, 1.45);
-    torso.position.set(0, 0.42, 0);
-    torso.castShadow = true;
-    torso.receiveShadow = true;
-    bodyPivot.add(torso);
-
-    headPivot.position.set(0, 0.54, 0.36);
-    const head = new THREE.Mesh(new THREE.IcosahedronGeometry(0.19, 1), capyMat);
-    head.scale.set(0.85, 0.9, 1.25);
-    head.position.z = 0.16;
-    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.11, 8, 8), darkMat);
-    nose.position.set(0, -0.01, 0.36);
-    headPivot.add(head, nose);
-    bodyPivot.add(headPivot);
-
-    const makeCapyLeg = (lx, lz) => {
-      const g = new THREE.Group();
-      g.position.set(lx, 0.25, lz);
-      const limb = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.045, 0.25, 7), darkMat);
-      limb.position.y = -0.125;
-      g.add(limb);
-      return g;
-    };
-    legFL.copy(makeCapyLeg(0.15, 0.26));
-    legFR.copy(makeCapyLeg(-0.15, 0.26));
-    legBL.copy(makeCapyLeg(0.15, -0.26));
-    legBR.copy(makeCapyLeg(-0.15, -0.26));
-    bodyPivot.add(legFL, legFR, legBL, legBR);
-    hpBarSprite.position.y = 1.15;
+  } else if (species === 'capybara' || species === 'tapir') {
+    // Danta Andina / Fauna ribereña integrada desde "Modelos 3D/" (Fauna.tsx -> Tapir)
+    populateExternalTapirModel({ bodyPivot, headPivot, legFL, legFR, legBL, legBR }, registerMat);
+    hpBarSprite.position.y = 1.25;
   } else {
-    const blackMat = registerMat('#18181b');
-    const whiteMat = registerMat('#f8fafc');
-    const crestMat = registerMat('#be123c');
-
-    const body = new THREE.Mesh(new THREE.ConeGeometry(0.24, 1.05, 8), blackMat);
-    body.rotation.x = Math.PI / 2;
-    body.castShadow = true;
-    const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.20, 0.22, 0.14, 10), whiteMat);
-    collar.rotation.x = Math.PI / 2;
-    collar.position.set(0, 0.02, 0.38);
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 8), crestMat);
-    head.position.set(0, 0.06, 0.54);
-    bodyPivot.add(body, collar, head);
-
-    const buildWing = (side) => {
-      const g = new THREE.Group();
-      const mainWing = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.05, 0.42), blackMat);
-      mainWing.position.set(side * 0.80, 0.03, 0);
-      mainWing.castShadow = true;
-      const patch = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.06, 0.20), whiteMat);
-      patch.position.set(side * 0.72, 0.04, -0.06);
-      g.add(mainWing, patch);
-      return g;
-    };
-    wingL.copy(buildWing(1));
-    wingR.copy(buildWing(-1));
-    bodyPivot.add(wingL, wingR);
-    hpBarSprite.position.y = 1.1;
+    // Cóndor Andino integrado desde "Modelos 3D/" + "Animación v2" (alas bi-articuladas con retardo de punta)
+    const condorBuilt = populateExternalCondorModel({ bodyPivot, headPivot, wingL, wingR, tailPivot }, registerMat);
+    wingOuterL = condorBuilt.wingOuterL;
+    wingOuterR = condorBuilt.wingOuterR;
+    hpBarSprite.position.y = 1.15;
   }
 
   return {
-    root, bodyPivot, headPivot, legFL, legFR, legBL, legBR, tailPivot, wingL, wingR,
+    root, bodyPivot, headPivot, legFL, legFR, legBL, legBR, paws, tailPivot, wingL, wingR, wingOuterL, wingOuterR,
     alertSprite, hpBarSprite, flashMaterials, species
   };
 }
@@ -903,14 +717,25 @@ export class VoxelWorld {
     this.sharedGeometries = new Set(Object.values(this.prototypes));
     this.sharedMaterials = new Set();
 
-    // Materiales compartidos Cel-Shaded reutilizables
+    // Materiales compartidos Cel-Shaded y material procedural de erosión/musgo para rocas instanciadas
     this.windMatTall = createWindFoliageMaterial(this.windUniform, 0.032);
     this.windMatLow = createWindFoliageMaterial(this.windUniform, 0.065);
     this.sharedInstancedMat = createCelToonMaterial({ vertexColors: true }, 0.52);
+    const rockBumpRough = MODEL_TEX.rockBumpRoughness();
+    this.rockInstancedMat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      map: MODEL_TEX.rockDiffuse(),
+      bumpMap: rockBumpRough,
+      bumpScale: 0.16,
+      roughnessMap: rockBumpRough,
+      roughness: 0.85,
+      metalness: 0.05
+    });
     this.foamInstancedMat = createFoamShaderMaterial(this.windUniform);
     this.sharedMaterials.add(this.windMatTall);
     this.sharedMaterials.add(this.windMatLow);
     this.sharedMaterials.add(this.sharedInstancedMat);
+    this.sharedMaterials.add(this.rockInstancedMat);
     this.sharedMaterials.add(this.foamInstancedMat);
 
     // Pasto denso y flores alrededor del jugador (hojas finas: se ven por ambas caras)
@@ -927,16 +752,32 @@ export class VoxelWorld {
     this.doorVisuals = new Map();
     this.windowVisuals = new Map();
 
-    // Estado atmosférico dinámico: Niebla andina gris-azulada suave -> Niebla púrpura oscura en tormenta
+    // Estado atmosférico dinámico:
+    // - Niebla andina gris-azulada suave -> Niebla púrpura oscura en tormenta
+    // - Transición cálida de incendio (ámbar/anaranjado humeante + cenizas/brasas) a < 45m del AH-64D siniestrado
     this.stormAtmosphereFactor = 0;
+    this.crashAtmosphereFactor = 0;
     this.clearSkyColor = new THREE.Color('#8bc6e6');
     this.stormSkyColor = new THREE.Color('#211132');
+    this.crashSkyColor = new THREE.Color('#703c1f');
     this.clearFogColor = new THREE.Color('#b6d0e4');
     this.stormFogColor = new THREE.Color('#261338');
+    this.crashFogColor = new THREE.Color('#582814');
+    this.baseHemiSky = new THREE.Color('#eef8ff');
+    this.baseHemiGround = new THREE.Color('#3a5f41');
+    this.crashHemiSky = new THREE.Color('#ffb273');
+    this.crashHemiGround = new THREE.Color('#4a2615');
+    this.baseSunColor = new THREE.Color('#fff2c4');
+    this.crashSunColor = new THREE.Color('#ff9d52');
     this.hemiLight = null;
     this.sunLight = null;
     this.stormParticles = null;
+    this.crashAshParticles = null;
     this.heliSmokeAccum = 0;
+    this.heliAnimState = null;
+    this.aircraftRigs = null;
+    this.activeAircraftId = 'ac130';
+    this.cameraOccluders = [];
 
     // Buffer reutilizable sin allocs para detección contextual [E]
     this._interactResult = { kind: null, id: null, promptText: '' };
@@ -971,14 +812,26 @@ export class VoxelWorld {
   disposeObjectTree(obj) {
     if (!obj) return;
     obj.traverse((child) => {
-      if (child.geometry && !this.sharedGeometries.has(child.geometry)) {
+      if (
+        child.geometry &&
+        !this.sharedGeometries.has(child.geometry) &&
+        !isSharedArmasV1Geometry(child.geometry) &&
+        !isSharedAircraftGeometry(child.geometry)
+      ) {
         child.geometry.dispose();
       }
       if (child.material) {
         const mats = Array.isArray(child.material) ? child.material : [child.material];
         for (let i = 0; i < mats.length; i++) {
           const m = mats[i];
-          if (!m || this.sharedMaterials.has(m)) continue;
+          if (
+            !m ||
+            this.sharedMaterials.has(m) ||
+            isSharedArmasV1Material(m) ||
+            isSharedAircraftMaterial(m)
+          ) {
+            continue;
+          }
           if (m.map && m.map !== this.waterTexture && m.map.isCanvasTexture && child.isSprite) {
             m.map.dispose();
           }
@@ -1197,7 +1050,10 @@ export class VoxelWorld {
     });
     this.sharedMaterials.add(cloudMat);
     this.cloudInstancedMesh = new THREE.InstancedMesh(this.prototypes.cloudPuff, cloudMat, puffsFlat.length);
-    this.cloudInstancedMesh.frustumCulled = false;
+    // Frustum Culling nativo de GPU con esfera envolvente global del cielo: oculta solo el draw call si la cámara
+    // mira al suelo, mientras update() avanza posiciones y matrices en cada frame sin pausar jamás el cielo.
+    this.cloudInstancedMesh.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 136, 0), 580);
+    this.cloudInstancedMesh.frustumCulled = true;
     this.cloudInstancedMesh.castShadow = false;
     this.cloudInstancedMesh.receiveShadow = false;
     this.scene.add(this.cloudInstancedMesh);
@@ -1229,6 +1085,43 @@ export class VoxelWorld {
     this.stormParticles.visible = false;
     this.poolGroup.add(this.stormParticles);
 
+    // Nube reutilizable de cenizas y brasas flotantes alrededor del AH-64D siniestrado (0 allocs en animate)
+    const ashCount = 190;
+    const ashPositions = new Float32Array(ashCount * 3);
+    const ashColors = new Float32Array(ashCount * 3);
+    const ashSeeds = new Float32Array(ashCount);
+    const emberCol = new THREE.Color('#ff8c38');
+    const ashCol = new THREE.Color('#57534e');
+    for (let i = 0; i < ashCount; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const rad = Math.sqrt(Math.random()) * 36;
+      ashPositions[i * 3] = Math.cos(ang) * rad;
+      ashPositions[i * 3 + 1] = Math.random() * 17;
+      ashPositions[i * 3 + 2] = Math.sin(ang) * rad;
+      ashSeeds[i] = Math.random() * Math.PI * 2;
+      const c = i % 3 === 0 ? emberCol : ashCol;
+      ashColors[i * 3] = c.r;
+      ashColors[i * 3 + 1] = c.g;
+      ashColors[i * 3 + 2] = c.b;
+    }
+    const ashGeo = new THREE.BufferGeometry();
+    ashGeo.setAttribute('position', new THREE.BufferAttribute(ashPositions, 3));
+    ashGeo.setAttribute('color', new THREE.BufferAttribute(ashColors, 3));
+    ashGeo.userData.seeds = ashSeeds;
+    const ashMat = new THREE.PointsMaterial({
+      size: 0.22,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false
+    });
+    this.sharedGeometries.add(ashGeo);
+    this.sharedMaterials.add(ashMat);
+    this.crashAshParticles = new THREE.Points(ashGeo, ashMat);
+    this.crashAshParticles.visible = false;
+    this.crashAshParticles.frustumCulled = false;
+    this.poolGroup.add(this.crashAshParticles);
+
     // ==================== OBJECT POOL AMPLIADO (220 PARTÍCULAS + 36 TRAZADORES) ====================
     const poolPartGeo = new THREE.OctahedronGeometry(0.095, 0);
     this.sharedGeometries.add(poolPartGeo);
@@ -1240,7 +1133,9 @@ export class VoxelWorld {
       darkSmoke: new THREE.MeshBasicMaterial({ color: '#1f2937', transparent: true, opacity: 0.72 }),
       fireOrange: new THREE.MeshBasicMaterial({ color: '#f97316', transparent: true, opacity: 0.92 }),
       woodSplinter: new THREE.MeshBasicMaterial({ color: '#8f5b34' }),
-      glassShard: new THREE.MeshBasicMaterial({ color: '#bae6fd', transparent: true, opacity: 0.88 })
+      glassShard: new THREE.MeshBasicMaterial({ color: '#bae6fd', transparent: true, opacity: 0.88 }),
+      waterRipple: new THREE.MeshBasicMaterial({ color: '#bae6fd', transparent: true, opacity: 0.78 }),
+      waterFoam: new THREE.MeshBasicMaterial({ color: '#f0f9ff', transparent: true, opacity: 0.88 })
     };
     Object.values(this.poolMats).forEach((m) => this.sharedMaterials.add(m));
 
@@ -1334,7 +1229,59 @@ export class VoxelWorld {
     this.buildOrganicTerrainAndRiver(this.mapData);
     this.buildRealisticStructuresAndPOIs(this.mapData);
     this.buildInstancedEnvironment(this.mapData);
+    this.rebuildCameraOccluders();
     return this.mapData;
+  }
+
+  /**
+   * Precalcula las esferas envolventes de todas las mallas opacas de terreno y estructuras
+   * para el Raycaster de colisión de cámara en 3ra persona (cero allocs por fotograma).
+   */
+  rebuildCameraOccluders() {
+    this.cameraOccluders.length = 0;
+    this.terrainGroup.updateMatrixWorld(true);
+    this.structuresGroup.updateMatrixWorld(true);
+
+    const registerGroup = (group) => {
+      group.traverse((obj) => {
+        if (!obj.isMesh || obj.isInstancedMesh || obj.userData?.noCameraBlock) return;
+        const mat = obj.material;
+        if (!mat || Array.isArray(mat) || mat.transparent) return;
+        const geo = obj.geometry;
+        if (!geo) return;
+        if (!geo.boundingSphere) geo.computeBoundingSphere();
+        if (!geo.boundingBox) geo.computeBoundingBox();
+        _occSphere.copy(geo.boundingSphere).applyMatrix4(obj.matrixWorld);
+        this.cameraOccluders.push({
+          mesh: obj,
+          cx: _occSphere.center.x,
+          cz: _occSphere.center.z,
+          r: _occSphere.radius
+        });
+      });
+    };
+
+    registerGroup(this.terrainGroup);
+    registerGroup(this.structuresGroup);
+  }
+
+  /**
+   * Llena outMeshes (sin asignar memoria) con las mallas opacas cercanas al pivote de cámara.
+   */
+  collectCameraOccludersNear(x, z, searchRadius, outMeshes) {
+    outMeshes.length = 0;
+    const list = this.cameraOccluders;
+    for (let i = 0; i < list.length; i++) {
+      const entry = list[i];
+      if (!entry.mesh.visible || (entry.mesh.parent && !entry.mesh.parent.visible)) continue;
+      const dx = entry.cx - x;
+      const dz = entry.cz - z;
+      const lim = entry.r + searchRadius;
+      if (dx * dx + dz * dz <= lim * lim) {
+        outMeshes.push(entry.mesh);
+      }
+    }
+    return outMeshes;
   }
 
   resetPlaneTracking(planeState) {
@@ -1342,6 +1289,10 @@ export class VoxelWorld {
       this.planeInitialized = false;
       return;
     }
+    if (planeState.aircraftType) {
+      this.setActiveAircraft(planeState.aircraftType);
+    }
+    this.getActiveAircraftRig()?.resetFlight();
     this.planeServerPredPos.set(planeState.x, planeState.y, planeState.z);
     this.planeSmoothPos.set(planeState.x, planeState.y, planeState.z);
     this.planeVelocity.set(planeState.vx || 0, 0, planeState.vz || 0);
@@ -1391,6 +1342,18 @@ export class VoxelWorld {
       posAttr.setY(i, h);
 
       tmpCol.copy(palette[surf] || palette[SURFACE.GRASS_VALLEY]);
+      const wp = getWaterProfileAt(wx, wz);
+      // Mezcla orgánica gradual en la ribera: grava/piedra húmeda junto al agua -> arena cálida -> pasto verde del valle
+      if (wp.active && wp.distFromEdge >= -1.2 && wp.distFromEdge < 9.5 && surf !== SURFACE.TOWN_COBBLESTONE) {
+        const wetFactor = Math.max(0, Math.min(1, 1 - (wp.distFromEdge + 1.2) / 5.2));
+        if (wetFactor > 0) {
+          tmpCol.lerp(rockCol, wetFactor * 0.42);
+        }
+        if (wp.distFromEdge > 3.2 && surf === SURFACE.GRASS_VALLEY) {
+          const sandBlend = Math.max(0, 1 - (wp.distFromEdge - 3.2) / 5.5);
+          tmpCol.lerp(palette[SURFACE.RIVER_SAND], sandBlend * 0.45);
+        }
+      }
       const slope = map.getSlopeAt(wx, wz);
       if (slope > 0.48 && h > WATER_LEVEL + 1.0 && surf !== SURFACE.CAVE_ROCK && surf !== SURFACE.SCORCHED_EARTH) {
         tmpCol.lerp(rockCol, Math.min(1, (slope - 0.48) * 1.6));
@@ -1443,23 +1406,41 @@ export class VoxelWorld {
       }
     }
 
-    const segs = 220;
+    // Malla continua de superficie de agua para el Río Quindío elevado y su Desembocadura / Laguna Andina nadable
+    const zSegs = 230;
+    const xSegs = 14;
+    const zMin = -WORLD_HALF;
+    const zMax = Math.min(WORLD_HALF, LAGOON_CONFIG.endZ + 5.5);
     const riverPositions = [];
     const riverUVs = [];
     const riverIndices = [];
-    const halfWidth = 12.2;
+    const colsPerRow = xSegs + 1;
 
-    for (let s = 0; s <= segs; s++) {
-      const t = s / segs;
-      const wz = -WORLD_HALF + t * WORLD_SIZE;
-      const cx = getRiverCenterWorldX(wz);
-      riverPositions.push(cx - halfWidth, WATER_LEVEL + 0.02, wz);
-      riverPositions.push(cx + halfWidth, WATER_LEVEL + 0.02, wz);
-      riverUVs.push(0, t * 32, 1, t * 32);
+    for (let s = 0; s <= zSegs; s++) {
+      const t = s / zSegs;
+      const wz = zMin + t * (zMax - zMin);
+      const ch = getWaterChannelAt(wz);
+      const asymOffset = ch.lagoonFactor * (4.2 * Math.sin((wz - 210) * 0.045));
+      const cx = ch.centerX + asymOffset;
+      const halfWidth = ch.active ? ch.halfWidth + 1.45 : 0.0;
 
-      if (s < segs) {
-        const base = s * 2;
-        riverIndices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
+      for (let uIdx = 0; uIdx <= xSegs; uIdx++) {
+        const u = uIdx / xSegs;
+        const wx = cx + (u * 2 - 1) * halfWidth;
+        riverPositions.push(wx, WATER_LEVEL + 0.02, wz);
+        riverUVs.push(u * (1 + ch.lagoonFactor * 2.4), t * 34);
+      }
+
+      if (s < zSegs) {
+        const row0 = s * colsPerRow;
+        const row1 = (s + 1) * colsPerRow;
+        for (let uIdx = 0; uIdx < xSegs; uIdx++) {
+          const a = row0 + uIdx;
+          const b = a + 1;
+          const c = row1 + uIdx;
+          const d = c + 1;
+          riverIndices.push(a, c, b, b, c, d);
+        }
       }
     }
 
@@ -1485,235 +1466,31 @@ export class VoxelWorld {
     this.terrainGroup.add(riverMesh);
   }
 
-  buildCocoraMonument(mon, stoneMat, darkOutlineMat) {
-    if (!mon) return;
-    const g = new THREE.Group();
-    g.position.set(mon.x, mon.y, mon.z);
-
-    // Basamento empedrado escalonado
-    const base1 = new THREE.Mesh(new THREE.BoxGeometry(27.6, 0.42, 4.2), stoneMat);
-    base1.position.y = 0.21;
-    base1.castShadow = true;
-    base1.receiveShadow = true;
-    const base2 = new THREE.Mesh(new THREE.BoxGeometry(26.2, 0.34, 3.0), stoneMat);
-    base2.position.y = 0.56;
-    base2.castShadow = true;
-    base2.receiveShadow = true;
-    g.add(base1, base2);
-
-    const letterMat = createCelToonMaterial({ color: '#fffbeb' }, 0.62);
-    const accentTrimMat = createCelToonMaterial({ color: '#d97706' }, 0.45);
-    const y0 = 0.72;
-    const H = mon.letterHeight || 4.4;
-    const W = 2.9;
-    const T = 0.72;
-    const D = 0.92;
-
-    const addLetterBox = (parent, lx, ly, w, h) => {
-      const front = new THREE.Mesh(new THREE.BoxGeometry(w, h, D), letterMat);
-      front.position.set(lx, ly, 0);
-      front.castShadow = true;
-      front.receiveShadow = true;
-      const outline = new THREE.Mesh(new THREE.BoxGeometry(w + 0.14, h + 0.14, D - 0.08), darkOutlineMat);
-      outline.position.set(lx, ly, -0.06);
-      parent.add(front, outline);
-    };
-
-    const letters = ['C', 'O', 'C', 'O', 'R', 'A'];
-    const letterCentersX = [-10.5, -6.3, -2.1, 2.1, 6.3, 10.5];
-
-    letters.forEach((ch, idx) => {
-      const lg = new THREE.Group();
-      lg.position.set(letterCentersX[idx], y0, 0);
-
-      const pedestal = new THREE.Mesh(new THREE.BoxGeometry(W + 0.35, 0.18, D + 0.28), accentTrimMat);
-      pedestal.position.y = 0.09;
-      lg.add(pedestal);
-
-      if (ch === 'C') {
-        addLetterBox(lg, -W * 0.5 + T * 0.5, H * 0.5, T, H);
-        addLetterBox(lg, 0, H - T * 0.5, W, T);
-        addLetterBox(lg, 0, T * 0.5, W, T);
-      } else if (ch === 'O') {
-        addLetterBox(lg, -W * 0.5 + T * 0.5, H * 0.5, T, H);
-        addLetterBox(lg, W * 0.5 - T * 0.5, H * 0.5, T, H);
-        addLetterBox(lg, 0, H - T * 0.5, W, T);
-        addLetterBox(lg, 0, T * 0.5, W, T);
-      } else if (ch === 'R') {
-        addLetterBox(lg, -W * 0.5 + T * 0.5, H * 0.5, T, H);
-        addLetterBox(lg, 0, H - T * 0.5, W, T);
-        addLetterBox(lg, 0, H * 0.52, W * 0.92, T * 0.9);
-        addLetterBox(lg, W * 0.5 - T * 0.5, H * 0.76, T, H * 0.48);
-        const legDiag = new THREE.Mesh(new THREE.BoxGeometry(T * 0.95, H * 0.58, D), letterMat);
-        legDiag.position.set(W * 0.20, H * 0.26, 0);
-        legDiag.rotation.z = 0.46;
-        legDiag.castShadow = true;
-        lg.add(legDiag);
-
-        // Escultura Monumental de Cóndor Andino con las alas desplegadas posado sobre la letra "R"
-        const condor = new THREE.Group();
-        condor.position.set(0.05, H + 0.15, 0.05);
-        const obsidianMat = createCelToonMaterial({ color: '#18181b' }, 0.5);
-        const ruffWhiteMat = createCelToonMaterial({ color: '#f8fafc' }, 0.4);
-        const crestRedMat = createCelToonMaterial({ color: '#be123c' }, 0.4);
-
-        const perchRock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.45, 0), stoneMat);
-        perchRock.scale.set(1.3, 0.55, 1.0);
-        condor.add(perchRock);
-
-        const body = new THREE.Mesh(new THREE.ConeGeometry(0.46, 1.85, 8), obsidianMat);
-        body.position.set(0, 0.95, 0.08);
-        body.rotation.x = 0.28;
-        body.castShadow = true;
-        const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.42, 0.24, 10), ruffWhiteMat);
-        collar.position.set(0, 1.58, 0.24);
-        collar.rotation.x = 0.30;
-        const head = new THREE.Mesh(new THREE.SphereGeometry(0.24, 10, 8), crestRedMat);
-        head.position.set(0, 1.84, 0.36);
-        const crest = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.20, 0.24), crestRedMat);
-        crest.position.set(0, 2.02, 0.42);
-        const beak = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.32, 6), accentTrimMat);
-        beak.rotation.x = Math.PI * 0.62;
-        beak.position.set(0, 1.80, 0.62);
-        condor.add(body, collar, head, crest, beak);
-
-        for (const side of [-1, 1]) {
-          const wingGroup = new THREE.Group();
-          wingGroup.position.set(side * 0.30, 1.35, 0.05);
-          wingGroup.rotation.z = -side * 0.24;
-          wingGroup.rotation.y = -side * 0.12;
-
-          const innerWing = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.12, 0.72), obsidianMat);
-          innerWing.position.x = side * 0.72;
-          innerWing.castShadow = true;
-          const outerWing = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.09, 0.54), obsidianMat);
-          outerWing.position.set(side * 1.95, 0.16, -0.06);
-          outerWing.rotation.z = -side * 0.18;
-          outerWing.castShadow = true;
-          const whiteCovert = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.13, 0.32), ruffWhiteMat);
-          whiteCovert.position.set(side * 1.15, 0.04, 0.10);
-          wingGroup.add(innerWing, outerWing, whiteCovert);
-
-          // Plumas primarias abiertas en las puntas
-          for (let f = 0; f < 4; f++) {
-            const feather = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.05, 0.11), obsidianMat);
-            feather.position.set(side * (2.68 + f * 0.06), 0.28 + f * 0.04, 0.14 - f * 0.14);
-            feather.rotation.y = side * (f - 1.5) * 0.18;
-            feather.castShadow = true;
-            wingGroup.add(feather);
-          }
-          condor.add(wingGroup);
-        }
-        lg.add(condor);
-      } else if (ch === 'A') {
-        addLetterBox(lg, -W * 0.5 + T * 0.5, H * 0.5, T, H);
-        addLetterBox(lg, W * 0.5 - T * 0.5, H * 0.5, T, H);
-        addLetterBox(lg, 0, H - T * 0.5, W, T);
-        addLetterBox(lg, 0, H * 0.48, W * 0.9, T * 0.9);
-      }
-      g.add(lg);
-    });
-
-    this.structuresGroup.add(g);
+  buildCocoraMonument(mon, stoneMat) {
+    const signGroup = buildExternalCocoraSignGroup(mon, stoneMat);
+    if (signGroup) this.structuresGroup.add(signGroup);
   }
 
   buildCrashedHelicopter(wreck) {
-    if (!wreck) return;
-    const oliveMat = createCelToonMaterial({ color: '#3f5232' }, 0.58);
-    const oliveDarkMat = createCelToonMaterial({ color: '#283620' }, 0.58);
-    const scorchedMat = createCelToonMaterial({ color: '#1c1917' }, 0.5);
-    const frameGlassMat = createCelToonMaterial({ color: '#334155' }, 0.5);
-    const hazardMat = createCelToonMaterial({ color: '#eab308' }, 0.4);
-
-    // Sección 1: Cabina y fuselaje principal inclinado en llamas
-    const hull = new THREE.Group();
-    hull.position.set(wreck.x, wreck.y + 0.85, wreck.z);
-    hull.rotation.set(-0.12, wreck.yaw, 0.26);
-
-    const cabinBox = new THREE.Mesh(new THREE.BoxGeometry(2.6, 2.1, 5.2), oliveMat);
-    cabinBox.castShadow = true;
-    cabinBox.receiveShadow = true;
-    const nose = new THREE.Mesh(new THREE.ConeGeometry(1.38, 2.2, 8), oliveDarkMat);
-    nose.rotation.x = Math.PI * 0.5;
-    nose.position.set(0, -0.15, 3.6);
-    nose.castShadow = true;
-    const cockpitFrame = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.92, 1.4), frameGlassMat);
-    cockpitFrame.position.set(0, 0.45, 2.45);
-    const enginePod = new THREE.Mesh(new THREE.CylinderGeometry(0.68, 0.78, 3.2, 10), scorchedMat);
-    enginePod.rotation.x = Math.PI * 0.5;
-    enginePod.position.set(0, 1.35, -0.3);
-    enginePod.castShadow = true;
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(2.66, 0.24, 1.4), hazardMat);
-    stripe.position.set(0, 0.1, -1.5);
-    hull.add(cabinBox, nose, cockpitFrame, enginePod, stripe);
-
-    // Patines de aterrizaje torcidos
-    for (const side of [-1, 1]) {
-      const skid = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 5.4, 8), scorchedMat);
-      skid.rotation.x = Math.PI * 0.5;
-      skid.position.set(side * 1.45, -1.18, 0.2);
-      hull.add(skid);
-    }
-
-    // Rotor principal torcido con 4 aspas dobladas/quemadas
-    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.20, 0.95, 8), scorchedMat);
-    mast.position.set(0, 1.95, 0.1);
-    mast.rotation.z = -0.18;
-    hull.add(mast);
-    for (let b = 0; b < 4; b++) {
-      const ang = (b / 4) * Math.PI * 2 + 0.35;
-      const blade = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.07, 0.30), b % 2 === 0 ? scorchedMat : oliveDarkMat);
-      blade.position.set(Math.cos(ang) * 2.1, 2.28 - (b % 2) * 0.22, Math.sin(ang) * 2.1);
-      blade.rotation.y = -ang;
-      blade.rotation.z = (b % 2 === 0 ? -1 : 1) * 0.16;
-      blade.castShadow = true;
-      hull.add(blade);
-    }
-
-    this.addLightAnchor(hull, '#ff6b00', 1.85, 16, 1.6, 0, 1.6, -0.6);
-    this.structuresGroup.add(hull);
-
-    // Sección 2: Cola separada del helicóptero a varios metros
-    const tail = new THREE.Group();
-    tail.position.set(wreck.tailX, wreck.tailY + 0.42, wreck.tailZ);
-    tail.rotation.set(0.08, wreck.tailYaw, -0.22);
-
-    const boom = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.72, 5.2, 9), oliveMat);
-    boom.rotation.z = Math.PI * 0.5;
-    boom.castShadow = true;
-    boom.receiveShadow = true;
-    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.95, 1.65, 0.18), oliveDarkMat);
-    fin.position.set(-2.35, 0.65, 0);
-    fin.rotation.z = 0.28;
-    fin.castShadow = true;
-    const tailRotor = new THREE.Mesh(new THREE.BoxGeometry(0.10, 1.45, 0.16), hazardMat);
-    tailRotor.position.set(-2.45, 1.15, 0.16);
-    tailRotor.rotation.x = 0.65;
-    tail.add(boom, fin, tailRotor);
-
-    this.structuresGroup.add(tail);
+    this.heliAnimState = buildAH64ApacheWreckSite(
+      wreck,
+      this.structuresGroup,
+      this.addLightAnchor.bind(this)
+    );
   }
 
   buildRealisticStructuresAndPOIs(map) {
     const stoneMat = createCelToonMaterial({ color: '#788290' });
     const darkStoneMat = createCelToonMaterial({ color: '#535d6b' });
     const ruinStoneMat = createCelToonMaterial({ color: '#64707d' });
-    const woodDeckMat = createCelToonMaterial({ color: '#8f5b34' });
     const doorWoodMat = createCelToonMaterial({ color: '#7c4722' });
     const beamMat = createCelToonMaterial({ color: '#4d301b' });
     const clayRoofMat = createCelToonMaterial({ color: '#be4b26' });
     const goldMat = createCelToonMaterial({ color: '#facc15' }, 0.35);
-    const darkOutlineMat = new THREE.MeshBasicMaterial({ color: '#111827' });
-    const windowGlassMat = new THREE.MeshStandardMaterial({
-      color: '#bae6fd',
-      emissive: '#38bdf8',
-      emissiveIntensity: 0.15,
-      transparent: true,
-      opacity: 0.46,
-      roughness: 0.12,
-      metalness: 0.25,
-      depthWrite: false
-    });
+    const CM = getColonialHouseMaterials();
+    for (const sharedMat of Object.values(CM)) {
+      if (sharedMat && sharedMat.isMaterial) this.sharedMaterials.add(sharedMat);
+    }
     const crystalMat = new THREE.MeshStandardMaterial({
       color: '#fbbf24',
       emissive: '#f59e0b',
@@ -1721,8 +1498,8 @@ export class VoxelWorld {
       roughness: 0.2
     });
 
-    // Monumento "COCORA" con Cóndor en la colina y Helicóptero Militar Estrellado
-    this.buildCocoraMonument(map.cocoraMonument, stoneMat, darkOutlineMat);
+    // Monumento "COCORA" con Cóndor en la colina y Helicóptero UH-1 Militar Estrellado ("Modelos 3D/")
+    this.buildCocoraMonument(map.cocoraMonument, stoneMat);
     this.buildCrashedHelicopter(map.helicopterWreck);
 
     // Fuente circular en Plaza de Salento
@@ -1744,91 +1521,13 @@ export class VoxelWorld {
     fountain.add(basin, fWater, pedestal);
     this.structuresGroup.add(fountain);
 
-    // 4 Puentes Arqueados de Piedra bien nivelados sobre el río y conectados suavemente a ambas orillas
+    // 4 Puentes de Piedra Reparados ("Modelos 3D/": sin wireframe/contornos negros sucios ni bloques desfasados)
     for (const br of map.bridges) {
-      const g = new THREE.Group();
-      const flatLen = br.spanFlatHalf * 2;
-      const deckThick = 0.38;
-
-      const deck = new THREE.Mesh(new THREE.BoxGeometry(flatLen, deckThick, br.widthHalf * 2), stoneMat);
-      deck.position.set(br.x, br.deckY - deckThick * 0.5, br.z);
-      deck.castShadow = true;
-      deck.receiveShadow = true;
-      g.add(deck);
-
-      // Arcos de piedra bajo el tablero sobre el cauce del río
-      for (const archX of [-11.0, 0.0, 11.0]) {
-        for (const side of [-1, 1]) {
-          const arch = new THREE.Mesh(new THREE.TorusGeometry(4.8, 0.44, 8, 16, Math.PI), darkStoneMat);
-          arch.position.set(br.x + archX, br.deckY - 4.85, br.z + side * (br.widthHalf - 0.36));
-          arch.castShadow = true;
-          arch.receiveShadow = true;
-          g.add(arch);
-        }
-      }
-
-      const leftDrop = br.deckY - br.leftGround;
-      const leftSlopeLen = Math.hypot(br.rampLen, leftDrop);
-      const leftAng = Math.atan2(leftDrop, br.rampLen);
-      const rampL = new THREE.Mesh(new THREE.BoxGeometry(leftSlopeLen + 0.18, deckThick, br.widthHalf * 2), stoneMat);
-      rampL.position.set(
-        br.x - br.spanFlatHalf - br.rampLen * 0.5,
-        (br.deckY + br.leftGround) * 0.5 - deckThick * 0.5 * Math.cos(leftAng),
-        br.z
-      );
-      rampL.rotation.z = leftAng;
-      rampL.castShadow = true;
-      rampL.receiveShadow = true;
-
-      const rightDrop = br.deckY - br.rightGround;
-      const rightSlopeLen = Math.hypot(br.rampLen, rightDrop);
-      const rightAng = -Math.atan2(rightDrop, br.rampLen);
-      const rampR = new THREE.Mesh(new THREE.BoxGeometry(rightSlopeLen + 0.18, deckThick, br.widthHalf * 2), stoneMat);
-      rampR.position.set(
-        br.x + br.spanFlatHalf + br.rampLen * 0.5,
-        (br.deckY + br.rightGround) * 0.5 - deckThick * 0.5 * Math.cos(rightAng),
-        br.z
-      );
-      rampR.rotation.z = rightAng;
-      rampR.castShadow = true;
-      rampR.receiveShadow = true;
-      g.add(rampL, rampR);
-
-      // Pilares robustos de piedra hasta el lecho del río
-      for (const px of [-16.2, -5.5, 5.5, 16.2]) {
-        const bedY = map.getTerrainHeightAt ? map.getTerrainHeightAt(br.x + px, br.z) - 0.8 : 0.2;
-        const pierH = Math.max(1.2, br.deckY - bedY);
-        const pier = new THREE.Mesh(new THREE.BoxGeometry(1.35, pierH, br.widthHalf * 1.92), darkStoneMat);
-        pier.position.set(br.x + px, bedY + pierH * 0.5, br.z);
-        pier.castShadow = true;
-        pier.receiveShadow = true;
-        g.add(pier);
-      }
-
-      // Pretiles laterales de mampostería de piedra con almenas bajas
-      for (const side of [-1, 1]) {
-        const railZ = br.z + side * (br.widthHalf - 0.20);
-        const parapetWall = new THREE.Mesh(new THREE.BoxGeometry(flatLen, 0.92, 0.36), stoneMat);
-        parapetWall.position.set(br.x, br.deckY + 0.46, railZ);
-        parapetWall.castShadow = true;
-        parapetWall.receiveShadow = true;
-        const capRail = new THREE.Mesh(new THREE.BoxGeometry(flatLen + 0.2, 0.14, 0.44), darkStoneMat);
-        capRail.position.set(br.x, br.deckY + 0.96, railZ);
-        capRail.castShadow = true;
-        g.add(parapetWall, capRail);
-
-        const railRampL = new THREE.Mesh(new THREE.BoxGeometry(leftSlopeLen, 0.86, 0.34), stoneMat);
-        railRampL.rotation.z = leftAng;
-        railRampL.position.set(br.x - br.spanFlatHalf - br.rampLen * 0.5, (br.deckY + br.leftGround) * 0.5 + 0.44, railZ);
-        railRampL.castShadow = true;
-
-        const railRampR = new THREE.Mesh(new THREE.BoxGeometry(rightSlopeLen, 0.86, 0.34), stoneMat);
-        railRampR.rotation.z = rightAng;
-        railRampR.position.set(br.x + br.spanFlatHalf + br.rampLen * 0.5, (br.deckY + br.rightGround) * 0.5 + 0.44, railZ);
-        railRampR.castShadow = true;
-        g.add(railRampL, railRampR);
-      }
-      this.structuresGroup.add(g);
+      const cleanBridge = buildCleanStoneBridge(br, map);
+      cleanBridge.traverse((o) => {
+        if (o.isMesh && o.material) this.sharedMaterials.add(o.material);
+      });
+      this.structuresGroup.add(cleanBridge);
     }
 
     // Cuevas Rocosas Explorables
@@ -1970,38 +1669,49 @@ export class VoxelWorld {
       this.structuresGroup.add(g);
     }
 
-    // Casas Paisas de 1, 2 y 3 Pisos sin huecos (con zócalo de piedra, balcones de madera, techos de teja e iluminación interior cálida)
+    // Casas Coloniales Reparadas ("Modelos 3D/": tejas 3D con computeVertexNormals() + luz cálida y ventanas con cristal transparente real)
     let warmHouseLights = 0;
     for (const b of map.buildings) {
       const g = new THREE.Group();
       const foundH = Math.max(0.8, b.floorY - b.minGroundY);
-      const foundation = new THREE.Mesh(new THREE.BoxGeometry(b.w + 0.72, foundH, b.d + 0.72), stoneMat);
+      const foundation = new THREE.Mesh(new THREE.BoxGeometry(b.w + 0.72, foundH, b.d + 0.72), CM.stoneFoundation);
       foundation.position.set(b.x, b.floorY - foundH * 0.5, b.z);
       foundation.castShadow = true;
       foundation.receiveShadow = true;
-      const groundFloor = new THREE.Mesh(new THREE.BoxGeometry(b.w - 0.06, 0.06, b.d - 0.06), woodDeckMat);
+      const groundFloor = new THREE.Mesh(new THREE.BoxGeometry(b.w - 0.06, 0.06, b.d - 0.06), CM.woodDeck);
       groundFloor.position.set(b.x, b.floorY + 0.01, b.z);
       groundFloor.receiveShadow = true;
       g.add(foundation, groundFloor);
 
       if (b.kind === 'mirador') {
         for (const [px, pz] of [[-4.2, -4.2], [4.2, -4.2], [-4.2, 4.2], [4.2, 4.2]]) {
-          const post = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.25, b.wallH, 10), beamMat);
+          const post = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.25, b.wallH, 10), CM.woodBeam);
           post.position.set(b.x + px, b.floorY + b.wallH * 0.5, b.z + pz);
           post.castShadow = true;
           g.add(post);
         }
-        const roof = new THREE.Mesh(new THREE.ConeGeometry(7.6, 2.2, 4), clayRoofMat);
+        const roof = new THREE.Mesh(new THREE.ConeGeometry(7.6, 2.2, 4), CM.roofTiles);
         roof.rotation.y = Math.PI / 4;
         roof.position.set(b.x, b.floorY + b.wallH + 1.1, b.z);
+        roof.geometry.computeVertexNormals();
         roof.castShadow = true;
+        roof.receiveShadow = true;
         g.add(roof);
         this.structuresGroup.add(g);
         continue;
       }
 
-      const wallMat = createCelToonMaterial({ color: b.wallColor });
-      const zocaloMat = createCelToonMaterial({ color: b.zocaloColor });
+      const wallMat = new THREE.MeshStandardMaterial({
+        map: MODEL_TEX.stucco([2, 2]),
+        color: b.wallColor,
+        roughness: 0.88,
+        metalness: 0.02
+      });
+      const zocaloMat = new THREE.MeshStandardMaterial({
+        color: b.zocaloColor,
+        roughness: 0.74,
+        metalness: 0.04
+      });
       const wt = 0.26;
       const doorW = 1.76;
       const doorH = 2.44;
@@ -2009,7 +1719,7 @@ export class VoxelWorld {
       const floors = b.floors || 1;
 
       const buildLevelFacade = (axis, fixedCoord, length, yBase, hasDoor, showZocalo) => {
-        const zocH = showZocalo ? 0.95 : 0.28;
+        const zocH = showZocalo ? 0.94 : 0.28;
         const center = axis === 'z' ? b.x : b.z;
         const halfL = length * 0.5;
 
@@ -2027,25 +1737,25 @@ export class VoxelWorld {
         };
 
         if (!hasDoor) {
+          // Vanos reales abiertos en el muro para que las ventanas transparentes dejen ver el interior amoblado
           const winW = Math.min(2.35, length * 0.44);
           const sideL = halfL - winW * 0.5;
-          addSeg(center, length, yBase, zocH, showZocalo ? stoneMat : zocaloMat, 0.04);
-          if (zocH < 0.94) addSeg(center, length, yBase + zocH, 0.94 - zocH, zocaloMat, 0.02);
+          addSeg(center, length, yBase, zocH, zocaloMat, 0.03);
+          if (zocH < 0.94) addSeg(center, length, yBase + zocH, 0.94 - zocH, wallMat, 0.0);
           addSeg(center - winW * 0.5 - sideL * 0.5, sideL, yBase + 0.94, 1.44, wallMat);
           addSeg(center + winW * 0.5 + sideL * 0.5, sideL, yBase + 0.94, 1.44, wallMat);
           addSeg(center, length, yBase + 2.38, floorH - 2.38, wallMat);
-          addSeg(center, winW + 0.28, yBase + 0.92, 0.10, beamMat, 0.12);
-          addSeg(center, winW + 0.28, yBase + 2.38, 0.10, beamMat, 0.10);
+          addSeg(center, winW + 0.26, yBase + 2.38, 0.10, CM.woodBeam, 0.08);
         } else {
           const sideLen = halfL - doorW * 0.5;
           const leftC = center - doorW * 0.5 - sideLen * 0.5;
           const rightC = center + doorW * 0.5 + sideLen * 0.5;
-          addSeg(leftC, sideLen, yBase, zocH, showZocalo ? stoneMat : zocaloMat, 0.04);
-          addSeg(rightC, sideLen, yBase, zocH, showZocalo ? stoneMat : zocaloMat, 0.04);
+          addSeg(leftC, sideLen, yBase, zocH, zocaloMat, 0.03);
+          addSeg(rightC, sideLen, yBase, zocH, zocaloMat, 0.03);
           addSeg(leftC, sideLen, yBase + zocH, floorH - zocH, wallMat);
           addSeg(rightC, sideLen, yBase + zocH, floorH - zocH, wallMat);
-          addSeg(center, doorW + 0.04, yBase + doorH, floorH - doorH, wallMat);
-          addSeg(center, doorW + 0.28, yBase + doorH - 0.08, 0.14, beamMat, 0.08);
+          addSeg(center, doorW + 0.04, yBase + doorH + 0.02, floorH - doorH - 0.02, wallMat);
+          addSeg(center, doorW + 0.28, yBase + doorH + 0.01, 0.12, CM.woodBeam, 0.08);
         }
       };
 
@@ -2062,13 +1772,21 @@ export class VoxelWorld {
         buildLevelFacade('z', b.z - b.d * 0.5, b.w, yBase, northDoor, isGround);
         buildLevelFacade('x', b.x - b.w * 0.5, b.d - wt, yBase, westDoor, isGround);
         buildLevelFacade('x', b.x + b.w * 0.5, b.d - wt, yBase, eastDoor, isGround);
+
+        // Cornisa colonial de terracota entre niveles (ColonialHouse.tsx)
+        if (f > 0) {
+          const cornice = new THREE.Mesh(new THREE.BoxGeometry(b.w + 0.24, 0.14, b.d + 0.24), CM.cornice);
+          cornice.position.set(b.x, yBase, b.z);
+          cornice.castShadow = true;
+          g.add(cornice);
+        }
       }
 
       for (let sIdx = 1; sIdx < (b.walkableSlabs?.length || 0); sIdx++) {
         const sl = b.walkableSlabs[sIdx];
         const sw = sl.maxX - sl.minX;
         const sd = sl.maxZ - sl.minZ;
-        const slabMesh = new THREE.Mesh(new THREE.BoxGeometry(sw, 0.20, sd), woodDeckMat);
+        const slabMesh = new THREE.Mesh(new THREE.BoxGeometry(sw, 0.20, sd), CM.woodDeck);
         slabMesh.position.set((sl.minX + sl.maxX) * 0.5, sl.y - 0.10, (sl.minZ + sl.maxZ) * 0.5);
         slabMesh.castShadow = true;
         slabMesh.receiveShadow = true;
@@ -2084,7 +1802,7 @@ export class VoxelWorld {
         const dirSign = runZ >= 0 ? 1 : -1;
         const pitchAng = -dirSign * Math.atan2(riseY, Math.abs(runZ));
 
-        const stringer = new THREE.Mesh(new THREE.BoxGeometry(sw - 0.08, 0.18, slopeLen), beamMat);
+        const stringer = new THREE.Mesh(new THREE.BoxGeometry(sw - 0.08, 0.18, slopeLen), CM.woodBeam);
         stringer.position.set(cxStair, (st.y0 + st.y1) * 0.5 - 0.10, (st.zStart + st.zEnd) * 0.5);
         stringer.rotation.x = pitchAng;
         g.add(stringer);
@@ -2092,40 +1810,70 @@ export class VoxelWorld {
         const stepCount = 12;
         for (let k = 0; k < stepCount; k++) {
           const t = (k + 0.5) / stepCount;
-          const stepMesh = new THREE.Mesh(new THREE.BoxGeometry(sw - 0.04, 0.08, Math.abs(runZ) / stepCount + 0.06), woodDeckMat);
+          const stepMesh = new THREE.Mesh(new THREE.BoxGeometry(sw - 0.04, 0.08, Math.abs(runZ) / stepCount + 0.06), CM.woodDeck);
           stepMesh.position.set(cxStair, st.y0 + riseY * t - 0.04, st.zStart + runZ * t);
           g.add(stepMesh);
         }
 
         const railX = st.eastSide ? st.minX - 0.08 : st.maxX + 0.08;
         const railLen = Math.abs(runZ) - 0.6;
-        const guardRail = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.94, railLen), beamMat);
+        const guardRail = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.94, railLen), CM.woodBeam);
         guardRail.position.set(railX, st.y1 + 0.47, (st.zStart + st.zEnd) * 0.5);
         g.add(guardRail);
       }
 
-      // Balcones tradicionales Paisas de madera con barandal torneado
+      // Balcones Coloniales con barandal torneado, ménsulas y materas de geranios (ColonialHouse.tsx)
       for (const bal of b.balconies || []) {
         const bw = bal.maxX - bal.minX;
+        const bd = bal.maxZ - bal.minZ;
         const cxBal = (bal.minX + bal.maxX) * 0.5;
+        const czBal = (bal.minZ + bal.maxZ) * 0.5;
         const outerZ = bal.south ? bal.maxZ - 0.06 : bal.minZ + 0.06;
-        const topBar = new THREE.Mesh(new THREE.BoxGeometry(bw + 0.12, 0.12, 0.16), beamMat);
-        topBar.position.set(cxBal, bal.y + 0.94, outerZ);
-        topBar.castShadow = true;
-        const botBar = new THREE.Mesh(new THREE.BoxGeometry(bw, 0.24, 0.12), zocaloMat);
-        botBar.position.set(cxBal, bal.y + 0.14, outerZ);
-        botBar.castShadow = true;
-        g.add(topBar, botBar);
-        for (let bx = -bw * 0.46; bx <= bw * 0.46; bx += 0.52) {
-          const baluster = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.76, 0.06), woodDeckMat);
-          baluster.position.set(cxBal + bx, bal.y + 0.54, outerZ);
-          g.add(baluster);
+
+        const frontRailMesh = new THREE.Mesh(buildColonialRailingGeo(bw), zocaloMat);
+        frontRailMesh.position.set(cxBal, bal.y, outerZ);
+        frontRailMesh.castShadow = true;
+        g.add(frontRailMesh);
+
+        const sideRailGeo = buildColonialRailingGeo(Math.max(0.6, bd - 0.12));
+        for (const sx of [-1, 1]) {
+          const sRail = new THREE.Mesh(sx < 0 ? sideRailGeo : sideRailGeo.clone(), zocaloMat);
+          sRail.position.set(cxBal + sx * (bw * 0.5 - 0.04), bal.y, czBal);
+          sRail.rotation.y = Math.PI * 0.5;
+          sRail.castShadow = true;
+          g.add(sRail);
+        }
+
+        for (const bxOff of [-bw * 0.36, 0, bw * 0.36]) {
+          const bracket = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 1.15), CM.woodBeam);
+          bracket.position.set(cxBal + bxOff, bal.y - 0.46, czBal);
+          bracket.rotation.x = bal.south ? -0.68 : 0.68;
+          g.add(bracket);
+        }
+
+        for (const pxOff of [-bw * 0.32, 0.05, bw * 0.30]) {
+          const potZ = bal.south ? outerZ - 0.18 : outerZ + 0.18;
+          const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.10, 0.075, 0.18, 8), CM.potClay);
+          pot.position.set(cxBal + pxOff, bal.y + 0.09, potZ);
+          const bush = new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 6), CM.potFoliage);
+          bush.position.set(cxBal + pxOff, bal.y + 0.25, potZ);
+          const bloom = new THREE.Mesh(new THREE.SphereGeometry(0.055, 6, 6), CM.potFlower);
+          bloom.position.set(cxBal + pxOff + 0.05, bal.y + 0.34, potZ + 0.04);
+          g.add(pot, bush, bloom);
         }
       }
 
+      // Farol colonial exterior en fachada principal
+      const lanternZ = b.doorSide === 'north' ? b.z - b.d * 0.5 - 0.16 : b.z + b.d * 0.5 + 0.16;
+      const lanternArm = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.28), CM.lanternMetal);
+      lanternArm.position.set(b.x - 1.35, b.floorY + 2.52, lanternZ);
+      const lanternGlow = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.20, 0.14), CM.lanternGlow);
+      lanternGlow.position.set(b.x - 1.35, b.floorY + 2.38, lanternZ + (b.doorSide === 'north' ? -0.10 : 0.10));
+      g.add(lanternArm, lanternGlow);
+
       for (const sx of [-1, 1]) {
         for (const sz of [-1, 1]) {
-          const col = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.21, b.wallH + 0.06, 10), beamMat);
+          const col = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.21, b.wallH + 0.06, 10), CM.woodBeam);
           col.position.set(b.x + sx * (b.w * 0.5), b.floorY + b.wallH * 0.5, b.z + sz * (b.d * 0.5));
           col.castShadow = true;
           g.add(col);
@@ -2138,45 +1886,62 @@ export class VoxelWorld {
         const sideSegW = b.w * 0.5 - 1.1;
         for (const sz of [-1, 1]) {
           for (const sx of [-1, 1]) {
-            const pSeg = new THREE.Mesh(new THREE.BoxGeometry(sideSegW, pH, 0.28), stoneMat);
+            const pSeg = new THREE.Mesh(new THREE.BoxGeometry(sideSegW, pH, 0.28), CM.stoneFoundation);
             pSeg.position.set(b.x + sx * (1.1 + sideSegW * 0.5), topWallY + pH * 0.5, b.z + sz * (b.d * 0.5 - 0.05));
             pSeg.castShadow = true;
             g.add(pSeg);
           }
         }
         for (const sx of [-1, 1]) {
-          const pSide = new THREE.Mesh(new THREE.BoxGeometry(0.28, pH, b.d), stoneMat);
+          const pSide = new THREE.Mesh(new THREE.BoxGeometry(0.28, pH, b.d), CM.stoneFoundation);
           pSide.position.set(b.x + sx * (b.w * 0.5 - 0.05), topWallY + pH * 0.5, b.z);
           pSide.castShadow = true;
           g.add(pSide);
         }
       } else {
-        const roofSpan = b.d + 1.6;
-        const rise = 1.72;
-        const slopeLen = Math.hypot(roofSpan * 0.5, rise);
-        const slopeAng = Math.atan2(rise, roofSpan * 0.5);
+        // Techo Colonial Reparado: hastiales de estuco + faldones + tejas 3D con computeVertexNormals() y luz cálida
+        const over = 0.65;
+        const halfD = b.d * 0.5 + over;
+        const rise = 1.78;
+        const slopeLen = Math.hypot(halfD, rise);
+        const slopeAng = Math.atan2(rise, halfD);
+        const roofW = b.w + over * 2;
 
-        const roofFront = new THREE.Mesh(new THREE.BoxGeometry(b.w + 1.5, 0.20, slopeLen), clayRoofMat);
-        roofFront.position.set(b.x, topWallY + rise * 0.48, b.z + roofSpan * 0.24);
-        roofFront.rotation.x = slopeAng;
-        roofFront.castShadow = true;
-        roofFront.receiveShadow = true;
-        const roofBack = new THREE.Mesh(new THREE.BoxGeometry(b.w + 1.5, 0.20, slopeLen), clayRoofMat);
-        roofBack.position.set(b.x, topWallY + rise * 0.48, b.z - roofSpan * 0.24);
-        roofBack.rotation.x = -slopeAng;
-        roofBack.castShadow = true;
-        roofBack.receiveShadow = true;
-        const ridgeBeam = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, b.w + 1.56, 8), beamMat);
-        ridgeBeam.rotation.z = Math.PI / 2;
-        ridgeBeam.position.set(b.x, topWallY + rise, b.z);
-        g.add(roofFront, roofBack, ridgeBeam);
+        const gablesGeo = buildColonialGablesGeo(b.d, rise, b.w);
+        const gablesMesh = new THREE.Mesh(gablesGeo, wallMat);
+        gablesMesh.position.set(b.x, topWallY, b.z);
+        gablesMesh.castShadow = true;
+        gablesMesh.receiveShadow = true;
+        g.add(gablesMesh);
+
+        for (const sg of [1, -1]) {
+          const deckSlope = new THREE.Mesh(new THREE.BoxGeometry(roofW, 0.12, slopeLen), CM.roofUnderlay);
+          deckSlope.position.set(b.x, topWallY + rise * 0.5 + 0.02, b.z + sg * halfD * 0.5);
+          deckSlope.rotation.x = sg * slopeAng;
+          deckSlope.geometry.computeVertexNormals();
+          deckSlope.castShadow = true;
+          deckSlope.receiveShadow = true;
+          g.add(deckSlope);
+
+          const eaveBeam = new THREE.Mesh(new THREE.BoxGeometry(roofW, 0.12, 0.14), CM.woodBeam);
+          eaveBeam.position.set(b.x, topWallY - 0.02, b.z + sg * (halfD - 0.07));
+          g.add(eaveBeam);
+        }
+
+        const tilesGeo = buildColonialRoofTilesGeo(roofW, slopeLen, slopeAng, topWallY, halfD, rise);
+        const tilesMesh = new THREE.Mesh(tilesGeo, CM.roofTiles);
+        tilesMesh.position.set(b.x, 0, b.z);
+        tilesMesh.castShadow = true;
+        tilesMesh.receiveShadow = true;
+        g.add(tilesMesh);
       }
 
       if (b.hasTower) {
         const tower = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.65, 4.2, 8), zocaloMat);
         tower.position.set(b.x - b.w * 0.24, topWallY + 2.4, b.z);
         tower.castShadow = true;
-        const spire = new THREE.Mesh(new THREE.ConeGeometry(2.1, 2.2, 8), clayRoofMat);
+        const spire = new THREE.Mesh(new THREE.ConeGeometry(2.1, 2.2, 8), CM.roofTiles);
+        spire.geometry.computeVertexNormals();
         spire.position.set(b.x - b.w * 0.24, topWallY + 5.6, b.z);
         spire.castShadow = true;
         const cross = new THREE.Mesh(new THREE.OctahedronGeometry(0.35, 0), goldMat);
@@ -2236,23 +2001,13 @@ export class VoxelWorld {
       });
     }
 
-    // Construir Ventanas de Cristal Rompibles
+    // Construir Ventanas Coloniales Transparentes y Rompibles (transparent: true, opacity: 0.35, depthWrite: false)
+    const shutterPalette = ['#2b6cb0', '#2f7a4f', '#c8652f', '#0284c7'];
+    let winIdx = 0;
     for (const w of map.windows || []) {
-      const wg = new THREE.Group();
-      wg.position.set(w.x, w.y + w.height * 0.5, w.z);
-      const pane =
-        w.axis === 'z'
-          ? new THREE.Mesh(new THREE.BoxGeometry(w.width, w.height, 0.04), windowGlassMat)
-          : new THREE.Mesh(new THREE.BoxGeometry(0.04, w.height, w.width), windowGlassMat);
-      const barV =
-        w.axis === 'z'
-          ? new THREE.Mesh(new THREE.BoxGeometry(0.06, w.height, 0.07), beamMat)
-          : new THREE.Mesh(new THREE.BoxGeometry(0.07, w.height, 0.06), beamMat);
-      const barH =
-        w.axis === 'z'
-          ? new THREE.Mesh(new THREE.BoxGeometry(w.width, 0.06, 0.07), beamMat)
-          : new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.06, w.width), beamMat);
-      wg.add(pane, barV, barH);
+      const frameHex = shutterPalette[winIdx % shutterPalette.length];
+      winIdx++;
+      const { group: wg } = buildColonialWindowGroup(w, frameHex);
       this.structuresGroup.add(wg);
       this.windowVisuals.set(w.id, { data: w, group: wg });
     }
@@ -2271,6 +2026,11 @@ export class VoxelWorld {
     for (const entry of this.doorVisuals.values()) keepRoots.add(entry.pivot);
     for (const entry of this.windowVisuals.values()) keepRoots.add(entry.group);
     for (const anchor of this.lightAnchors) keepRoots.add(anchor);
+    if (this.heliAnimState?.rotorHead) keepRoots.add(this.heliAnimState.rotorHead);
+    if (this.heliAnimState?.chinGun) keepRoots.add(this.heliAnimState.chinGun);
+    if (this.heliAnimState?.fireMeshes) {
+      for (const f of this.heliAnimState.fireMeshes) keepRoots.add(f.mesh);
+    }
 
     root.updateMatrixWorld(true);
     const rootInverse = new THREE.Matrix4().copy(root.matrixWorld).invert();
@@ -2361,7 +2121,13 @@ export class VoxelWorld {
 
       for (const mesh of bucket.meshes) {
         mesh.removeFromParent();
-        if (!this.sharedGeometries.has(mesh.geometry)) mesh.geometry.dispose();
+        if (
+          !this.sharedGeometries.has(mesh.geometry) &&
+          !isSharedArmasV1Geometry(mesh.geometry) &&
+          !isSharedAircraftGeometry(mesh.geometry)
+        ) {
+          mesh.geometry.dispose();
+        }
       }
       root.add(mergedMesh);
     }
@@ -2474,17 +2240,23 @@ export class VoxelWorld {
         inst.castShadow = castShadow;
         inst.receiveShadow = receiveShadow;
 
+        let usedInstColor = false;
         for (let i = 0; i < tile.length; i++) {
           const p = tile[i];
           _tmpVecA.set(p.x, p.y + yOffset, p.z);
-          _tmpEuler.set(0, p.rotY || 0, 0);
+          _tmpEuler.set(p.rotX || 0, p.rotY || 0, p.rotZ || 0);
           _tmpQuatA.setFromEuler(_tmpEuler);
           const s = p.scale || 1;
-          _tmpScale.set(s, s, s);
+          _tmpScale.set(p.sx ?? s, p.sy ?? s, p.sz ?? s);
           _tmpMat4.compose(_tmpVecA, _tmpQuatA, _tmpScale);
           inst.setMatrixAt(i, _tmpMat4);
+          if (p.colorHex) {
+            inst.setColorAt(i, _tmpInstColor.set(p.colorHex));
+            usedInstColor = true;
+          }
         }
         inst.instanceMatrix.needsUpdate = true;
+        if (usedInstColor && inst.instanceColor) inst.instanceColor.needsUpdate = true;
         inst.computeBoundingSphere();
         inst.boundingSphere.radius += FOLIAGE_BOUNDS_PADDING;
         this.foliageGroup.add(inst);
@@ -2523,7 +2295,9 @@ export class VoxelWorld {
     addBatch(map.props.coffeeBushes, this.prototypes.coffeeBushes, this.windMatLow, false, true);
     addBatch(map.props.ferns, this.prototypes.ferns, this.windMatLow, false, true);
     addBatch(map.props.tallGrass, this.prototypes.tallGrass, this.windMatLow, false, false);
-    addBatch(map.props.boulders, this.prototypes.boulders, this.sharedInstancedMat, true, true);
+    // Rocas angulosas de montaña y cantos rodados de río/laguna con textura de erosión/musgo y hundimiento -0.2m en Y
+    addBatch(map.props.boulders, this.prototypes.boulders, this.rockInstancedMat, true, true, -0.2);
+    addBatch(map.props.riverCobbles, this.prototypes.riverCobbles, this.rockInstancedMat, true, true, -0.2);
     addBatch(map.props.riverFoam, this.prototypes.riverFoam, this.foamInstancedMat, false, false, 0.0);
 
     // Obstáculos tácticos y cercas con postes de piedra
@@ -2547,101 +2321,67 @@ export class VoxelWorld {
 
   createPlaneModel() {
     const g = new THREE.Group();
-
-    const hullMat = createCelToonMaterial({ color: '#f1f5f9' });
-    const floorMat = createCelToonMaterial({ color: '#334155' });
-    const benchMat = createCelToonMaterial({ color: '#9c6639' });
-    const yellowMat = createCelToonMaterial({ color: '#facc15' });
-    const blueMat = createCelToonMaterial({ color: '#2563eb' });
-    const redMat = createCelToonMaterial({ color: '#dc2626' });
-    const darkMat = createCelToonMaterial({ color: '#1e293b' });
-
-    const cabinFloor = new THREE.Mesh(new THREE.BoxGeometry(3.8, 0.22, 13.5), floorMat);
-    cabinFloor.position.set(0, -1.25, 0.2);
-    const jumpStripe = new THREE.Mesh(new THREE.BoxGeometry(3.5, 0.03, 0.5), yellowMat);
-    jumpStripe.position.set(0, -1.12, -6.1);
-    const cabinRoof = new THREE.Mesh(new THREE.CylinderGeometry(1.95, 1.95, 13.5, 12, 1, false, -Math.PI * 0.5, Math.PI), hullMat);
-    cabinRoof.rotation.x = Math.PI / 2;
-    cabinRoof.rotation.z = Math.PI / 2;
-    cabinRoof.scale.set(0.45, 1, 1);
-    cabinRoof.position.set(0, 1.45, 0.2);
-    g.add(cabinFloor, jumpStripe, cabinRoof);
-
-    for (const side of [-1, 1]) {
-      const wallX = side * 1.85;
-      const lowerWall = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.05, 13.4), hullMat);
-      lowerWall.position.set(wallX, -0.65, 0.2);
-      const upperWall = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.62, 13.4), hullMat);
-      upperWall.position.set(wallX, 1.18, 0.2);
-      g.add(lowerWall, upperWall);
-
-      for (let wz = -6.2; wz <= 6.5; wz += 3.15) {
-        const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.18, 1.0, 0.55), hullMat);
-        pillar.position.set(wallX, 0.36, wz);
-        g.add(pillar);
-      }
-
-      const bench = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.12, 11.4), benchMat);
-      bench.position.set(side * 1.45, -0.78, 0.0);
-      g.add(bench);
-    }
-
-    const openRamp = new THREE.Mesh(new THREE.BoxGeometry(3.5, 0.18, 2.9), floorMat);
-    openRamp.position.set(0, -1.68, -7.85);
-    openRamp.rotation.x = 0.32;
-    g.add(openRamp);
-
-    const noseCone = new THREE.Mesh(new THREE.ConeGeometry(1.9, 3.6, 10), hullMat);
-    noseCone.rotation.x = Math.PI / 2;
-    noseCone.position.set(0, 0.05, 8.6);
-    const windshield = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.68, 1.2), darkMat);
-    windshield.position.set(0, 0.85, 7.5);
-    g.add(noseCone, windshield);
-
-    // Luz de cabina: persistente (el avión no se reconstruye con el mapa)
-    this.addLightAnchor(g, '#fde68a', 1.3, 14, 2, 0, 1.2, -0.8, true);
-
-    const wingY = new THREE.Mesh(new THREE.BoxGeometry(22, 0.32, 3.2), yellowMat);
-    wingY.position.set(0, 1.85, 1.0);
-    const wingB = new THREE.Mesh(new THREE.BoxGeometry(22.04, 0.34, 0.85), blueMat);
-    wingB.position.set(0, 1.86, -0.25);
-    const wingR = new THREE.Mesh(new THREE.BoxGeometry(22.04, 0.34, 0.75), redMat);
-    wingR.position.set(0, 1.86, -1.0);
-    g.add(wingY, wingB, wingR);
-
-    const tailV = new THREE.Mesh(new THREE.BoxGeometry(0.45, 3.2, 2.6), redMat);
-    tailV.position.set(0, 2.8, -5.8);
-    const tailH = new THREE.Mesh(new THREE.BoxGeometry(7.6, 0.28, 1.9), blueMat);
-    tailH.position.set(0, 1.95, -6.0);
-    g.add(tailV, tailH);
-
-    const props = [];
-    for (const side of [-1, 1]) {
-      const nacelle = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.42, 2.2, 10), darkMat);
-      nacelle.rotation.x = Math.PI / 2;
-      nacelle.position.set(side * 5.2, 1.45, 2.1);
-      const blade = new THREE.Mesh(new THREE.BoxGeometry(2.9, 0.26, 0.14), yellowMat);
-      blade.position.set(side * 5.2, 1.45, 3.3);
-      g.add(nacelle, blade);
-      props.push(blade);
-    }
-    g.userData.propellers = props;
-
+    const addAnchor = this.addLightAnchor.bind(this);
+    const ac130 = buildAC130Transport(addAnchor);
+    const ch47 = buildCH47Transport(addAnchor);
+    ch47.group.visible = false;
+    g.add(ac130.group, ch47.group);
+    this.aircraftRigs = { ac130, ch47 };
+    this.activeAircraftId = 'ac130';
     return g;
   }
 
+  setActiveAircraft(typeId = 'ac130') {
+    if (!this.aircraftRigs) return;
+    const nextId = typeId === 'ch47' ? 'ch47' : 'ac130';
+    const prevRig = this.aircraftRigs[this.activeAircraftId];
+    const nextRig = this.aircraftRigs[nextId];
+    const changed = this.activeAircraftId !== nextId;
+    this.activeAircraftId = nextId;
+    this.aircraftRigs.ac130.group.visible = nextId === 'ac130';
+    this.aircraftRigs.ch47.group.visible = nextId === 'ch47';
+    if (changed && nextRig) {
+      nextRig.resetFlight();
+      if (prevRig?.cabinBayGroup && nextRig.cabinBayGroup) {
+        while (prevRig.cabinBayGroup.children.length > 0) {
+          nextRig.cabinBayGroup.add(prevRig.cabinBayGroup.children[0]);
+        }
+      }
+    }
+  }
+
+  getActiveAircraftRig() {
+    return this.aircraftRigs?.[this.activeAircraftId] || this.aircraftRigs?.ac130 || null;
+  }
+
+  getActiveCabinBayGroup() {
+    return this.getActiveAircraftRig()?.cabinBayGroup || this.planeMesh;
+  }
+
+  sampleCabinDisembarkLocalPose(seatIndex = 0, normProgress = 0) {
+    const rig = this.getActiveAircraftRig();
+    if (rig) return rig.sampleDisembarkLocalPose(seatIndex, normProgress);
+    return { x: 0, y: -1.14, z: 0, yaw: Math.PI, phase: 'sit', standBlend: 0, walkCycle: 0 };
+  }
+
   getCabinSeatTransform(seatIndex = 0) {
-    const side = seatIndex % 2 === 0 ? -1 : 1;
-    const row = Math.floor(seatIndex / 2) % 6;
-    _tmpVecA.set(side * 1.32, -1.14, 4.2 - row * 1.72);
+    const rig = this.getActiveAircraftRig();
+    const localSeat = rig
+      ? rig.getSeatLocalPose(seatIndex)
+      : {
+          x: (seatIndex % 2 === 0 ? -1 : 1) * 1.32,
+          y: -1.14,
+          z: 4.2 - (Math.floor(seatIndex / 2) % 6) * 1.72,
+          yaw: seatIndex % 2 === 0 ? Math.PI / 2 : -Math.PI / 2
+        };
+    _tmpVecA.set(localSeat.x, localSeat.y, localSeat.z);
     _tmpVecA.applyMatrix4(this.planeMesh.matrixWorld);
 
-    const seatYaw = this.planeSmoothYaw + (side < 0 ? Math.PI / 2 : -Math.PI / 2);
     return {
       x: _tmpVecA.x,
       y: _tmpVecA.y,
       z: _tmpVecA.z,
-      yaw: seatYaw,
+      yaw: this.planeSmoothYaw + localSeat.yaw,
       roll: this.planeMesh.rotation.z,
       pitch: this.planeMesh.rotation.x
     };
@@ -2681,7 +2421,15 @@ export class VoxelWorld {
   addLootItems(items) {
     const slopeNorm = new THREE.Vector3();
     const bbox = new THREE.Box3();
-    const firearmIds = new Set(['pistol', 'shotgun', 'smg', 'rifle', 'sniper']);
+    const firearmIds = new Set([
+      'pistol',
+      'revolver',
+      'shotgun',
+      'smg',
+      'assault_rifle',
+      'rifle',
+      'sniper'
+    ]);
 
     for (const item of items) {
       if (this.lootMeshes.has(item.id)) continue;
@@ -2718,7 +2466,7 @@ export class VoxelWorld {
       const highlightMeshes = [];
 
       if (firearmIds.has(item.type)) {
-        const wScale = item.type === 'pistol' ? 1.38 : 1.15;
+        const wScale = item.type === 'pistol' || item.type === 'revolver' ? 1.38 : 1.15;
         const gunModel = createDetailedWeaponMesh(item.type, wScale);
         gunModel.rotation.z = Math.PI / 2 - 0.12;
         gunModel.rotation.x = 0.04;
@@ -2734,20 +2482,11 @@ export class VoxelWorld {
           }
         });
       } else if (item.type === 'medkit') {
-        const caseMat = new THREE.MeshStandardMaterial({ color: '#f8fafc', roughness: 0.4 });
-        const crossMat = new THREE.MeshStandardMaterial({
-          color: '#f43f5e',
-          emissive: '#e11d48',
-          emissiveIntensity: 0.42,
-          roughness: 0.35
-        });
-        const bag = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.20, 0.38), caseMat);
-        const crossH = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.03, 0.08), crossMat);
-        crossH.position.y = 0.11;
-        const crossV = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.03, 0.26), crossMat);
-        crossV.position.y = 0.11;
-        realShape.add(bag, crossH, crossV);
-        highlightMeshes.push(crossMat);
+        const extMed = createExternalMedkitLootMesh();
+        realShape.add(extMed.group);
+        for (let i = 0; i < extMed.highlightMats.length; i++) {
+          highlightMeshes.push(extMed.highlightMats[i]);
+        }
       } else if (item.type === 'bandage') {
         const gauzeMat = new THREE.MeshStandardMaterial({ color: '#f1f5f9', roughness: 0.7 });
         const bandMat = new THREE.MeshStandardMaterial({
@@ -2904,6 +2643,8 @@ export class VoxelWorld {
           aiState: data.aiState,
           pose: data.pose,
           animPhase: data.animPhase || 0,
+          localPhase: data.animPhase || 0,
+          rear: 0,
           flashTimer: 0
         };
         this.wildlifeEntries.set(data.id, entry);
@@ -2912,7 +2653,7 @@ export class VoxelWorld {
         entry.maxHp = data.maxHp;
         entry.aiState = data.aiState;
         entry.pose = data.pose;
-        entry.animPhase = data.animPhase || entry.animPhase;
+        if (entry.localPhase === undefined) entry.localPhase = data.animPhase || 0;
         // Redibujar la barra de vida (canvas + subida de textura) solo si cambió
         const barKey = `${data.hp}|${data.maxHp}|${data.aiState === 'hostile'}`;
         if (barKey !== entry.barKey) {
@@ -2970,16 +2711,72 @@ export class VoxelWorld {
       }
 
       if (m.species === 'condor') {
-        const flap = Math.sin(timeSec * 3.2 + entry.animPhase) * 0.25;
-        m.wingL.rotation.z = flap;
-        m.wingR.rotation.z = -flap;
-        m.bodyPivot.rotation.z = Math.cos(timeSec * 1.2 + entry.animPhase) * 0.18;
+        // Animación v2 de Cóndor Andino: aleteo bi-articulado con retardo en puntas de ala (wingOuter) y cabeceo suave
+        const freq = 2.1;
+        const amp = 0.26;
+        const base = 0.16;
+        const tWing = timeSec * freq + entry.localPhase;
+        const flap = Math.sin(tWing) * amp;
+        const lag = Math.sin(tWing - 0.7) * amp * 0.9;
+        m.wingL.rotation.z = base + flap;
+        m.wingR.rotation.z = -(base + flap);
+        if (m.wingOuterL) m.wingOuterL.rotation.z = lag * 0.8;
+        if (m.wingOuterR) m.wingOuterR.rotation.z = -lag * 0.8;
+        m.bodyPivot.position.y = Math.sin(tWing) * 0.05;
+        m.bodyPivot.rotation.x = Math.sin(timeSec * 0.6 + entry.localPhase) * 0.04;
+        m.bodyPivot.rotation.z = Math.cos(timeSec * 1.15 + entry.localPhase) * 0.16;
+        if (m.tailPivot) m.tailPivot.rotation.x = Math.sin(timeSec * 0.8 + entry.localPhase) * 0.08;
         continue;
       }
 
       const isMoving = entry.pose === 'wander' || entry.pose === 'run' || entry.pose === 'attack';
+      const stepFreq = entry.pose === 'run' ? 10.0 : isMoving ? 4.6 : 0.0;
+      entry.localPhase += dt * stepFreq;
+      const phase = entry.localPhase;
+
+      if (m.species === 'bear') {
+        // Animación v2 de Oso de Anteojos: erguido feroz con zarpazos al atacar, galope asimétrico y flexión de zarpas
+        const isAttack = entry.pose === 'attack';
+        const atkCycle = (timeSec * 1.25 + entry.animPhase) % 1;
+        const targetRear = isAttack ? Math.sin(Math.PI * Math.min(1, atkCycle * 1.25)) : 0;
+        entry.rear = damp(entry.rear || 0, targetRear, 10, dt);
+
+        m.bodyPivot.rotation.x = -entry.rear * 0.92;
+        m.bodyPivot.position.y =
+          entry.rear * 0.24 + (isMoving ? Math.abs(Math.sin(phase)) * (entry.pose === 'run' ? 0.08 : 0.04) : 0);
+
+        const legs = [m.legFL, m.legFR, m.legBL, m.legBR];
+        for (let i = 0; i < 4; i++) {
+          const front = i < 2;
+          const ph = phase + (i === 0 || i === 3 ? 0 : Math.PI) + (entry.pose === 'run' && front ? 0.6 : 0);
+          let ang = isMoving ? Math.sin(ph) * (entry.pose === 'run' ? 0.7 : 0.42) : 0;
+          if (front && entry.rear > 0.05) {
+            ang = -entry.rear * (i === 0 ? 1.58 + Math.sin(atkCycle * 18) * 0.48 : 1.0);
+          } else if (!front && entry.rear > 0.05) {
+            ang = entry.rear * 0.88;
+          }
+          legs[i].rotation.x = ang;
+          if (m.paws && m.paws[i]) {
+            m.paws[i].rotation.x =
+              isMoving && entry.rear < 0.1
+                ? Math.max(0, -Math.sin(phase + (i === 0 || i === 3 ? 0 : Math.PI))) * 0.58
+                : 0;
+          }
+        }
+
+        const idleLike = entry.pose === 'graze' || entry.pose === 'rest' || !isMoving;
+        const targetHeadX = isAttack
+          ? -0.35 * entry.rear
+          : idleLike
+          ? 0.35 + Math.sin(timeSec * 1.1 + entry.animPhase) * 0.12
+          : Math.sin(phase * 2) * 0.05;
+        const targetHeadY = idleLike && !isAttack ? Math.sin(timeSec * 0.6 + entry.animPhase) * 0.28 : 0;
+        m.headPivot.rotation.x += (targetHeadX - m.headPivot.rotation.x) * lerpF;
+        m.headPivot.rotation.y += (targetHeadY - m.headPivot.rotation.y) * lerpF;
+        continue;
+      }
+
       const legAmp = entry.pose === 'run' ? 0.68 : isMoving ? 0.38 : 0.0;
-      const phase = entry.animPhase + timeSec * (entry.pose === 'run' ? 9 : 3);
       const swing = Math.sin(phase) * legAmp;
 
       m.legFL.rotation.x = swing;
@@ -2988,7 +2785,7 @@ export class VoxelWorld {
       m.legBL.rotation.x = -swing;
 
       if (entry.pose === 'graze') {
-        m.headPivot.rotation.x += (0.50 + Math.sin(timeSec * 4) * 0.08 - m.headPivot.rotation.x) * lerpF;
+        m.headPivot.rotation.x += (0.52 + Math.sin(timeSec * 1.4 + entry.animPhase) * 0.08 - m.headPivot.rotation.x) * lerpF;
         m.bodyPivot.position.y += (0 - m.bodyPivot.position.y) * lerpF;
       } else if (entry.pose === 'rest') {
         m.headPivot.rotation.x += (0.15 - m.headPivot.rotation.x) * lerpF;
@@ -2997,7 +2794,7 @@ export class VoxelWorld {
         m.headPivot.rotation.x = Math.sin(timeSec * 15) * 0.45 - 0.18;
         m.bodyPivot.position.y += (0.10 - m.bodyPivot.position.y) * lerpF;
       } else {
-        m.headPivot.rotation.x += (0 - m.headPivot.rotation.x) * lerpF;
+        m.headPivot.rotation.x += ((isMoving ? Math.sin(phase) * 0.05 : 0) - m.headPivot.rotation.x) * lerpF;
         m.bodyPivot.position.y += (Math.abs(Math.cos(phase)) * 0.04 * (isMoving ? 1 : 0) - m.bodyPivot.position.y) * lerpF;
       }
 
@@ -3094,6 +2891,29 @@ export class VoxelWorld {
     }
   }
 
+  spawnWaterRipples(x, z, isMoving = false, intensity = 1.0) {
+    const count = isMoving ? 3 : 2;
+    const surfY = WATER_LEVEL + 0.05;
+    for (let i = 0; i < count; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const rad = 0.22 + Math.random() * 0.38;
+      const outSpeed = (isMoving ? 1.45 : 0.75) * intensity;
+      this._acquireParticle(
+        x + Math.cos(ang) * rad,
+        surfY,
+        z + Math.sin(ang) * rad,
+        Math.cos(ang) * outSpeed,
+        isMoving ? (0.45 + Math.random() * 0.85) * intensity : 0.12,
+        Math.sin(ang) * outSpeed,
+        i === 0 ? this.poolMats.waterFoam : this.poolMats.waterRipple,
+        0.42,
+        isMoving ? 4.8 : 0.5,
+        0.75 * intensity,
+        1.65
+      );
+    }
+  }
+
   spawnHealParticles(x, y, z) {
     for (let i = 0; i < 2; i++) {
       const ang = Math.random() * Math.PI * 2;
@@ -3146,28 +2966,76 @@ export class VoxelWorld {
 
   updateStormAtmosphere(dt, timeSec, stormState, viewerPos) {
     let targetFactor = 0;
-    if (stormState && viewerPos && viewerPos.active && viewerPos.state !== 'plane') {
-      const distCenter = Math.hypot(viewerPos.x - stormState.centerX, viewerPos.z - stormState.centerZ);
-      const distToEdge = stormState.radius - distCenter;
+    let targetCrashFactor = 0;
+    const hw = this.mapData?.helicopterWreck;
 
-      if (distToEdge <= 0) {
-        targetFactor = Math.min(1.0, 0.64 + (Math.abs(distToEdge) / 28.0) * 0.36);
-      } else if (distToEdge < 44) {
-        const nearT = 1 - distToEdge / 44;
-        targetFactor = nearT * nearT * 0.60;
+    if (viewerPos && viewerPos.active && viewerPos.state !== 'plane') {
+      if (stormState) {
+        const distCenter = Math.hypot(viewerPos.x - stormState.centerX, viewerPos.z - stormState.centerZ);
+        const distToEdge = stormState.radius - distCenter;
+
+        if (distToEdge <= 0) {
+          targetFactor = Math.min(1.0, 0.64 + (Math.abs(distToEdge) / 28.0) * 0.36);
+        } else if (distToEdge < 44) {
+          const nearT = 1 - distToEdge / 44;
+          targetFactor = nearT * nearT * 0.60;
+        }
+      }
+
+      if (hw) {
+        const crashCenterX = (hw.x + (hw.tailX ?? hw.x)) * 0.5;
+        const crashCenterZ = (hw.z + (hw.tailZ ?? hw.z)) * 0.5;
+        const radius = hw.atmosphereRadius || 45.0;
+        const distCrash = Math.hypot(viewerPos.x - crashCenterX, viewerPos.z - crashCenterZ);
+        if (distCrash < radius) {
+          const raw = 1 - distCrash / radius;
+          targetCrashFactor = raw * raw * (3 - 2 * raw);
+        }
       }
     }
 
     this.stormAtmosphereFactor = damp(this.stormAtmosphereFactor, targetFactor, 3.6, dt);
+    this.crashAtmosphereFactor = damp(this.crashAtmosphereFactor, targetCrashFactor, 3.2, dt);
     const sf = this.stormAtmosphereFactor;
+    const cf = this.crashAtmosphereFactor;
 
-    this.scene.fog.color.copy(this.clearFogColor).lerp(this.stormFogColor, sf);
-    this.scene.fog.density = 0.00155 + sf * sf * 0.025;
-    this.scene.background.copy(this.clearSkyColor).lerp(this.stormSkyColor, sf);
+    this.scene.fog.color.copy(this.clearFogColor).lerp(this.crashFogColor, cf * 0.78).lerp(this.stormFogColor, sf);
+    this.scene.fog.density = 0.00155 + cf * 0.0068 + sf * sf * 0.025;
+    this.scene.background.copy(this.clearSkyColor).lerp(this.crashSkyColor, cf * 0.65).lerp(this.stormSkyColor, sf);
 
     if (this.hemiLight && this.sunLight) {
-      this.hemiLight.intensity = 0.98 - sf * 0.38;
-      this.sunLight.intensity = 1.48 - sf * 0.78;
+      this.hemiLight.color.copy(this.baseHemiSky).lerp(this.crashHemiSky, cf * 0.85);
+      this.hemiLight.groundColor.copy(this.baseHemiGround).lerp(this.crashHemiGround, cf * 0.85);
+      this.sunLight.color.copy(this.baseSunColor).lerp(this.crashSunColor, cf * 0.75);
+      this.hemiLight.intensity = 0.98 + cf * 0.14 - sf * 0.38;
+      this.sunLight.intensity = 1.48 - cf * 0.18 - sf * 0.78;
+    }
+
+    if (this.crashAshParticles && hw) {
+      const distForAsh = viewerPos ? Math.hypot(viewerPos.x - hw.x, viewerPos.z - hw.z) : 999;
+      if (distForAsh < 95) {
+        this.crashAshParticles.visible = true;
+        this.crashAshParticles.position.set((hw.x + hw.tailX) * 0.5, hw.y, (hw.z + hw.tailZ) * 0.5);
+        this.crashAshParticles.material.opacity = Math.min(0.92, 0.26 + cf * 0.68);
+        const posAttr = this.crashAshParticles.geometry.attributes.position;
+        const seeds = this.crashAshParticles.geometry.userData.seeds;
+        for (let i = 0; i < posAttr.count; i++) {
+          let px = posAttr.getX(i) + Math.sin(timeSec * 1.4 + seeds[i]) * dt * 1.6;
+          let py = posAttr.getY(i) + dt * (i % 3 === 0 ? 2.2 : 0.95);
+          let pz = posAttr.getZ(i) + Math.cos(timeSec * 1.2 + seeds[i]) * dt * 1.5;
+          if (py > 18) {
+            py = 0.2;
+            const a = seeds[i] + timeSec * 0.3;
+            const rad = (i % 19) * 1.7;
+            px = Math.cos(a) * rad;
+            pz = Math.sin(a) * rad;
+          }
+          posAttr.setXYZ(i, px, py, pz);
+        }
+        posAttr.needsUpdate = true;
+      } else {
+        this.crashAshParticles.visible = false;
+      }
     }
 
     if (this.stormParticles) {
@@ -3203,49 +3071,55 @@ export class VoxelWorld {
     // El sol (frustum de sombras) y las luces puntuales se actualizan en updateRenderBudget(),
     // que main.js llama justo antes de renderizar, ya con la cámara del fotograma.
 
-    // Humo oscuro ascendente, llamas y chispas del Helicóptero Estrellado reciclados por Object Pooling
+    // Humo denso ascendente, llamas vivas, chispas recicladas por Object Pool y rotor del AH-64D Apache siniestrado
     if (this.mapData && this.mapData.helicopterWreck) {
       const hw = this.mapData.helicopterWreck;
-      const nearHeli = !viewerPos || Math.hypot(viewerPos.x - hw.x, viewerPos.z - hw.z) < 230;
+      if (this.heliAnimState?.update) {
+        this.heliAnimState.update(dt, timeSec);
+      }
+      const nearHeli = !viewerPos || Math.hypot(viewerPos.x - hw.x, viewerPos.z - hw.z) < 250;
       if (nearHeli) {
         this.heliSmokeAccum += dt;
-        if (this.heliSmokeAccum >= 0.085) {
+        if (this.heliSmokeAccum >= 0.075) {
           this.heliSmokeAccum = 0;
-          // Columna de humo oscuro ascendente
+          const emitters = this.heliAnimState?.emitterPoints;
+          const em =
+            emitters && emitters.length > 0
+              ? emitters[Math.floor(Math.random() * emitters.length)]
+              : { x: hw.x, y: hw.y + 1.6, z: hw.z - 0.4, scale: 1.0 };
+
           this._acquireParticle(
-            hw.x + (Math.random() - 0.5) * 1.1,
-            hw.y + 2.1,
-            hw.z - 0.4 + (Math.random() - 0.5) * 1.1,
-            0.35 + (Math.random() - 0.5) * 0.7,
-            2.6 + Math.random() * 1.2,
-            (Math.random() - 0.5) * 0.7,
+            em.x + (Math.random() - 0.5) * 0.95,
+            em.y + 0.55,
+            em.z + (Math.random() - 0.5) * 0.95,
+            0.35 + (Math.random() - 0.5) * 0.75,
+            2.7 + Math.random() * 1.35,
+            (Math.random() - 0.5) * 0.75,
             this.poolMats.darkSmoke,
-            2.1,
+            2.15,
             -0.35,
-            2.4,
-            2.8
+            2.35 * (em.scale || 1),
+            2.85
           );
-          // Llamas naranjas + chispa ocasional
           this._acquireParticle(
-            hw.x + (Math.random() - 0.5) * 0.85,
-            hw.y + 1.55,
-            hw.z - 0.35 + (Math.random() - 0.5) * 0.85,
-            (Math.random() - 0.5) * 0.8,
-            1.9 + Math.random() * 1.4,
-            (Math.random() - 0.5) * 0.8,
-            Math.random() > 0.28 ? this.poolMats.fireOrange : this.poolMats.sparkGold,
-            0.48,
-            -0.8,
-            1.75,
-            -1.4
+            em.x + (Math.random() - 0.5) * 0.75,
+            em.y + 0.15,
+            em.z + (Math.random() - 0.5) * 0.75,
+            (Math.random() - 0.5) * 1.35,
+            2.1 + Math.random() * 1.9,
+            (Math.random() - 0.5) * 1.35,
+            Math.random() > 0.34 ? this.poolMats.fireOrange : this.poolMats.sparkGold,
+            0.52,
+            Math.random() > 0.5 ? -0.8 : 6.5,
+            1.55 * (em.scale || 1),
+            -1.3
           );
         }
       }
     }
 
-    // Animar giro suave de puertas interactivas abiertas/cerradas
+    // Animar giro suave de puertas interactivas abiertas/cerradas de forma continua
     for (const dEntry of this.doorVisuals.values()) {
-      if (!dEntry.pivot.visible) continue;
       if (Math.abs(dEntry.curAngle - dEntry.targetAngle) > 0.005) {
         dEntry.curAngle = damp(dEntry.curAngle, dEntry.targetAngle, 12, dt);
         dEntry.pivot.rotation.y = dEntry.curAngle;
@@ -3265,6 +3139,12 @@ export class VoxelWorld {
 
     if (planeState && planeState.active) {
       this.planeMesh.visible = true;
+      if (planeState.aircraftType && planeState.aircraftType !== this.activeAircraftId) {
+        this.setActiveAircraft(planeState.aircraftType);
+      }
+
+      const turbPitch = Math.cos(timeSec * 1.15) * 0.012;
+      const turbRoll = Math.sin(timeSec * 1.5) * 0.022;
 
       if (!this.planeInitialized) {
         this.resetPlaneTracking(planeState);
@@ -3282,12 +3162,7 @@ export class VoxelWorld {
         this.planeSmoothPos.lerp(this.planeServerPredPos, corr);
 
         this.planeSmoothYaw = planeState.yaw || 0;
-        _tmpEuler.set(
-          Math.cos(timeSec * 1.15) * 0.01,
-          this.planeSmoothYaw,
-          Math.sin(timeSec * 1.5) * 0.02,
-          'YXZ'
-        );
+        _tmpEuler.set(turbPitch, this.planeSmoothYaw, turbRoll, 'YXZ');
         _tmpQuatB.setFromEuler(_tmpEuler);
         this.planeSmoothQuat.slerp(_tmpQuatB, corr);
 
@@ -3296,11 +3171,8 @@ export class VoxelWorld {
         this.planeMesh.updateMatrixWorld(true);
       }
 
-      if (this.planeMesh.userData.propellers) {
-        for (const prop of this.planeMesh.userData.propellers) {
-          prop.rotation.z += dt * 42;
-        }
-      }
+      const activeRig = this.getActiveAircraftRig();
+      activeRig?.update(dt, { pitch: turbPitch, roll: turbRoll });
     } else {
       this.planeMesh.visible = false;
       this.planeInitialized = false;

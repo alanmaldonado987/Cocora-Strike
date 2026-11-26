@@ -13,6 +13,7 @@ import {
   LOOT_TYPES,
   STORM_PHASES,
   PARACHUTE_CONFIG,
+  CABIN_DISEMBARK_MS,
   SWIM_CONFIG,
   generateCocoraMap,
   applyEntitySeparation
@@ -38,6 +39,8 @@ export class GameRoom {
 
     this.botDifficulty = 'easy';
     this.desiredBotCount = 6;
+    this.aircraftPreference = 'auto';
+    this.matchCounter = 0;
 
     this.players = new Map();
     this.loot = new Map();
@@ -62,8 +65,10 @@ export class GameRoom {
     return {
       fists: { unlocked: true, mag: 0 },
       pistol: { unlocked: false, mag: 0 },
+      revolver: { unlocked: false, mag: 0 },
       shotgun: { unlocked: false, mag: 0 },
       smg: { unlocked: false, mag: 0 },
+      assault_rifle: { unlocked: false, mag: 0 },
       rifle: { unlocked: false, mag: 0 },
       sniper: { unlocked: false, mag: 0 }
     };
@@ -78,6 +83,8 @@ export class GameRoom {
       isBot,
       colorIdx,
       seatIndex: 0,
+      cabinDisembarkStartAt: 0,
+      cabinProgress: 0,
       alive: true,
       spectating: false,
       hp: 100,
@@ -165,13 +172,21 @@ export class GameRoom {
           p.y = this.plane.y;
           p.z = this.plane.z;
           p.fallPeakY = this.plane.y;
+          if (p.cabinDisembarkStartAt > 0) {
+            const prog = Math.min(1, (now - p.cabinDisembarkStartAt) / CABIN_DISEMBARK_MS);
+            p.cabinProgress = prog;
+            p.moveMode = prog < 0.24 ? 'stand' : prog < 0.82 ? 'walk_cabin' : 'ramp_jump';
+            if (prog >= 1) {
+              this.completePlaneExit(p);
+            }
+          }
         }
       }
 
       if (this.plane.elapsed >= this.plane.maxDuration) {
         for (const p of this.players.values()) {
           if (p.alive && p.state === 'plane') {
-            this.handlePlayerJump(p.id);
+            this.completePlaneExit(p);
           }
         }
         this.plane.active = false;
@@ -287,6 +302,7 @@ export class GameRoom {
         isBot: p.isBot,
         colorIdx: p.colorIdx,
         seatIndex: p.seatIndex || 0,
+        cabinProgress: Number((p.cabinProgress || 0).toFixed(3)),
         alive: p.alive,
         hp: p.hp,
         maxHp: p.maxHp,
@@ -315,8 +331,10 @@ export class GameRoom {
         reloading: p.reloadingUntil > Date.now(),
         unlockedWeapons: {
           pistol: p.weapons.pistol.unlocked,
+          revolver: p.weapons.revolver.unlocked,
           shotgun: p.weapons.shotgun.unlocked,
           smg: p.weapons.smg.unlocked,
+          assault_rifle: p.weapons.assault_rifle.unlocked,
           rifle: p.weapons.rifle.unlocked,
           sniper: p.weapons.sniper.unlocked
         }

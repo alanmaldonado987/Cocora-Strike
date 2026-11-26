@@ -1,0 +1,426 @@
+{
+  "f22-raptor": {
+    "children": 6,
+    "animations": [
+      {
+        "axis": "z",
+        "speed": 8,
+        "mode": "pulse",
+        "pos": [
+          0,
+          0,
+          -0.44
+        ],
+        "rot": [
+          -1.5707963267948966,
+          0,
+          0,
+          "XYZ"
+        ]
+      },
+      {
+        "axis": "z",
+        "speed": 8,
+        "mode": "pulse",
+        "pos": [
+          0,
+          0,
+          -0.44
+        ],
+        "rot": [
+          -1.5707963267948966,
+          0,
+          0,
+          "XYZ"
+        ]
+      },
+      {
+        "axis": "z",
+        "speed": 12,
+        "mode": "spin",
+        "pos": [
+          0,
+          0,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          0,
+          "XYZ"
+        ]
+      }
+    ]
+  },
+  "a10-warthog": {
+    "children": 6,
+    "animations": [
+      {
+        "axis": "z",
+        "speed": -18,
+        "mode": "spin",
+        "pos": [
+          0,
+          0,
+          0.6156
+        ],
+        "rot": [
+          0,
+          0,
+          0,
+          "XYZ"
+        ]
+      },
+      {
+        "axis": "z",
+        "speed": 18,
+        "mode": "spin",
+        "pos": [
+          0,
+          0,
+          0.6156
+        ],
+        "rot": [
+          0,
+          0,
+          0,
+          "XYZ"
+        ]
+      },
+      {
+        "axis": "z",
+        "speed": 15,
+        "mode": "spin",
+        "pos": [
+          0,
+          0,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          0,
+          "XYZ"
+        ]
+      }
+    ]
+  },
+  "ac130-gunship": {
+    "children": 6,
+    "animations": [
+      {
+        "axis": "z",
+        "speed": 19,
+        "mode": "spin",
+        "pos": [
+          0,
+          0,
+          0.7728
+        ],
+        "rot": [
+          0,
+          0,
+          0,
+          "XYZ"
+        ]
+      },
+      {
+        "axis": "z",
+        "speed": 19,
+        "mode": "spin",
+        "pos": [
+          0,
+          0,
+          0.7728
+        ],
+        "rot": [
+          0,
+          0,
+          0,
+          "XYZ"
+        ]
+      },
+      {
+        "axis": "z",
+        "speed": 19,
+        "mode": "spin",
+        "pos": [
+          0,
+          0,
+          0.7728
+        ],
+        "rot": [
+          0,
+          0,
+          0,
+          "XYZ"
+        ]
+      },
+      {
+        "axis": "z",
+        "speed": 19,
+        "mode": "spin",
+        "pos": [
+          0,
+          0,
+          0.7728
+        ],
+        "rot": [
+          0,
+          0,
+          0,
+          "XYZ"
+        ]
+      }
+    ]
+  },
+  "biplane-scout": {
+    "children": 1,
+    "animations": [
+      {
+        "axis": "z",
+        "speed": 20,
+        "mode": "spin",
+        "pos": [
+          0,
+          0,
+          0.24
+        ],
+        "rot": [
+          0,
+          0,
+          0,
+          "XYZ"
+        ]
+      }
+    ]
+  },
+  "ah64-apache": {
+    "children": 6,
+    "animations": [
+      {
+        "axis": "y",
+        "speed": 1.4,
+        "mode": "oscillate",
+        "pos": [
+          0,
+          0.6600000000000001,
+          1.68
+        ],
+        "rot": [
+          0,
+          0,
+          0,
+          "XYZ"
+        ]
+      },
+      {
+        "axis": "y",
+        "speed": 14,
+        "mode": "spin",
+        "pos": [
+          0,
+          0,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          0,
+          "XYZ"
+        ]
+      },
+      {
+        "axis": "x",
+        "speed": 24,
+        "mode": "spin",
+        "pos": [
+          0.18,
+          2.1,
+          -3.62
+        ],
+        "rot": [
+          0,
+          0,
+          0,
+          "XYZ"
+        ]
+      }
+    ]
+  },
+  "ka52-alligator": {
+    "children": 6,
+    "animations": [
+      {
+        "axis": "y",
+        "speed": 13.5,
+        "mode": "spin",
+        "pos": [
+          0,
+          0,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          0,
+          "XYZ"
+        ]
+      },
+      {
+        "axis": "y",
+        "speed": -13.5,
+        "mode": "spin",
+        "pos": [
+          0,
+          0,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          0,
+          "XYZ"
+        ]
+      }
+    ]
+  },
+  "ch47-chinook": {
+    "children": 6,
+    "animations": [
+      {
+        "axis": "z",
+        "speed": 18,
+        "mode": "spin",
+        "pos": [
+          0,
+          0,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          0,
+          "XYZ"
+        ]
+      },
+      {
+        "axis": "z",
+        "speed": 18,
+        "mode": "spin",
+        "pos": [
+          0,
+          0,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          0,
+          "XYZ"
+        ]
+      },
+      {
+        "axis": "y",
+        "speed": 12.5,
+        "mode": "spin",
+        "pos": [
+          0,
+          0,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          0,
+          "XYZ"
+        ]
+      },
+      {
+        "axis": "y",
+        "speed": -12.5,
+        "mode": "spin",
+        "pos": [
+          0,
+          0,
+          0
+        ],
+        "rot": [
+          0,
+          1.0471975511965976,
+          0,
+          "XYZ"
+        ]
+      }
+    ]
+  },
+  "ah6-littlebird": {
+    "children": 6,
+    "animations": [
+      {
+        "axis": "y",
+        "speed": 16,
+        "mode": "spin",
+        "pos": [
+          0,
+          0,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          0,
+          "XYZ"
+        ]
+      },
+      {
+        "axis": "x",
+        "speed": 26,
+        "mode": "spin",
+        "pos": [
+          0.14,
+          1.4200000000000002,
+          -3.28
+        ],
+        "rot": [
+          0,
+          0,
+          0,
+          "XYZ"
+        ]
+      },
+      {
+        "axis": "z",
+        "speed": 22,
+        "mode": "spin",
+        "pos": [
+          0,
+          0,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          0,
+          "XYZ"
+        ]
+      },
+      {
+        "axis": "z",
+        "speed": 22,
+        "mode": "spin",
+        "pos": [
+          0,
+          0,
+          0
+        ],
+        "rot": [
+          0,
+          0,
+          0,
+          "XYZ"
+        ]
+      }
+    ]
+  }
+}

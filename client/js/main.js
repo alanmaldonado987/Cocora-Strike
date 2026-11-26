@@ -5,6 +5,7 @@
 
 import * as THREE from 'three';
 import {
+  WATER_LEVEL,
   GRID_SIZE,
   WORLD_HALF,
   DEFAULT_MAP_SEED,
@@ -21,12 +22,15 @@ import { SoundEngine } from './audio.js';
 import { VoxelWorld } from './world.js';
 import { AVATAR_COLORS, LocalPlayerController } from './player.js';
 import { NetworkManager } from './network.js';
+import { preloadExternalModelAssets } from '/Modelos%203D/cocoraModels.js';
 
 const WEAPON_SVG_PATHS = {
   fists: 'M12 25 L28 23 L32 18 L106 14 L112 19 L32 25 L28 29 L12 29 Z',
   pistol: 'M32 12 L86 12 L86 19 L54 19 L48 33 L36 33 L41 19 L32 19 Z',
+  revolver: 'M28 15 L44 15 L48 11 L66 11 L68 14 L94 14 L94 18 L68 18 L66 23 L50 23 L45 34 L34 33 L40 22 L28 19 Z',
   shotgun: 'M8 22 L28 16 L112 16 L112 20 L62 20 L58 24 L34 24 L20 31 L8 29 Z',
   smg: 'M20 15 L96 15 L96 19 L74 19 L74 28 L68 28 L68 20 L54 20 L56 34 L49 34 L47 20 L34 20 L30 31 L22 31 L26 19 L20 19 Z',
+  assault_rifle: 'M8 18 L26 17 L28 14 L52 14 L55 10 L69 10 L71 14 L112 14 L112 18 L74 18 L70 22 L59 22 L61 34 L53 34 L51 22 L38 22 L33 32 L26 32 L30 22 L10 25 Z',
   rifle: 'M6 21 L26 16 L46 14 L112 15 L112 18 L78 18 L74 22 L58 22 L63 34 L54 35 L50 22 L36 22 L31 32 L24 32 L28 22 L6 26 Z',
   sniper: 'M4 21 L26 17 L48 17 L50 11 L78 11 L80 17 L116 17 L116 20 L74 20 L66 24 L56 32 L49 32 L53 22 L28 22 L8 27 Z'
 };
@@ -44,6 +48,7 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 container.appendChild(renderer.domElement);
 
 const audio = new SoundEngine();
+await preloadExternalModelAssets();
 const world = new VoxelWorld(scene);
 let currentMap = world.buildFromSeed(DEFAULT_MAP_SEED);
 
@@ -150,6 +155,7 @@ const ui = {
   lobbyPlayersList: document.getElementById('lobby-players-list'),
   botDifficultySelect: document.getElementById('bot-difficulty-select'),
   botCountSelect: document.getElementById('bot-count-select'),
+  aircraftTypeSelect: document.getElementById('aircraft-type-select'),
   btnAddBot: document.getElementById('btn-add-bot'),
   btnClearBots: document.getElementById('btn-clear-bots'),
   btnStartSolo: document.getElementById('btn-start-solo'),
@@ -199,8 +205,10 @@ const ui = {
   ammoReserve: document.getElementById('ammo-reserve'),
   slotFists: document.getElementById('slot-fists'),
   slotPistol: document.getElementById('slot-pistol'),
+  slotRevolver: document.getElementById('slot-revolver'),
   slotShotgun: document.getElementById('slot-shotgun'),
   slotSmg: document.getElementById('slot-smg'),
+  slotAssaultRifle: document.getElementById('slot-assault-rifle'),
   slotRifle: document.getElementById('slot-rifle'),
   slotSniper: document.getElementById('slot-sniper'),
 
@@ -240,7 +248,7 @@ function bakeMinimapTerrain(mapData) {
       const surf = mapData.surfaceGrid[gz * V + gx];
       const h = mapData.heightGrid[gz * V + gx];
 
-      if (surf === SURFACE.RIVER_BED) ctx.fillStyle = '#18b8d4';
+      if (surf === SURFACE.RIVER_BED) ctx.fillStyle = WATER_LEVEL - h > 2.65 ? '#0e8aa8' : '#18b8d4';
       else if (surf === SURFACE.RIVER_SAND) ctx.fillStyle = '#ded09c';
       else if (surf === SURFACE.DIRT_TRAIL) ctx.fillStyle = '#b58250';
       else if (surf === SURFACE.SCORCHED_EARTH) ctx.fillStyle = '#382c25';
@@ -574,8 +582,10 @@ function updateHUD() {
 
   updateSlotClass(ui.slotFists, 'fists');
   updateSlotClass(ui.slotPistol, 'pistol');
+  updateSlotClass(ui.slotRevolver, 'revolver');
   updateSlotClass(ui.slotShotgun, 'shotgun');
   updateSlotClass(ui.slotSmg, 'smg');
+  updateSlotClass(ui.slotAssaultRifle, 'assault_rifle');
   updateSlotClass(ui.slotRifle, 'rifle');
   updateSlotClass(ui.slotSniper, 'sniper');
 
@@ -622,7 +632,10 @@ function updateHUD() {
     ui.actionBanner.classList.remove('hidden');
   } else if (localPlayer.state === 'plane') {
     const alt = Math.round(localPlayer.currentGroundClearance);
-    ui.actionBanner.textContent = `✈️ AVIONETA (${alt}m) · [V] Cambiar Vista — Pulsa [ESPACIO] o [F] para saltar (~10s caída libre)`;
+    const airLabel = (planeState?.label || 'AC-130J Ghostrider').toUpperCase();
+    ui.actionBanner.textContent = localPlayer.isCabinDisembarking
+      ? `✈️ ${airLabel} · AVANZANDO POR LA BODEGA HACIA LA RAMPA...`
+      : `✈️ ${airLabel} (${alt}m) · [V] Vista Cabina/Exterior — Pulsa [ESPACIO] o [F] para desembarcar`;
     ui.actionBanner.classList.remove('hidden');
   } else if (localPlayer.state === 'skydiving') {
     const alt = Math.round(localPlayer.currentGroundClearance);
@@ -697,6 +710,9 @@ const net = new NetworkManager(scene, {
       );
       if (optExists) ui.botCountSelect.value = String(data.botCount);
     }
+    if (ui.aircraftTypeSelect && data.aircraftType) {
+      ui.aircraftTypeSelect.value = data.aircraftType;
+    }
 
     if (data.countdown !== null) {
       ui.lobbyCountdown.textContent = `⏱️ Despegue automático en ${data.countdown}s...`;
@@ -756,8 +772,10 @@ const net = new NetworkManager(scene, {
     localPlayer.weapons = {
       fists: { unlocked: true, mag: 0 },
       pistol: { unlocked: false, mag: 0 },
+      revolver: { unlocked: false, mag: 0 },
       shotgun: { unlocked: false, mag: 0 },
       smg: { unlocked: false, mag: 0 },
+      assault_rifle: { unlocked: false, mag: 0 },
       rifle: { unlocked: false, mag: 0 },
       sniper: { unlocked: false, mag: 0 }
     };
@@ -833,19 +851,16 @@ const net = new NetworkManager(scene, {
       }
       if (me.unlockedWeapons) {
         localPlayer.weapons.pistol.unlocked = Boolean(me.unlockedWeapons.pistol);
+        localPlayer.weapons.revolver.unlocked = Boolean(me.unlockedWeapons.revolver);
         localPlayer.weapons.shotgun.unlocked = Boolean(me.unlockedWeapons.shotgun);
         localPlayer.weapons.smg.unlocked = Boolean(me.unlockedWeapons.smg);
+        localPlayer.weapons.assault_rifle.unlocked = Boolean(me.unlockedWeapons.assault_rifle);
         localPlayer.weapons.rifle.unlocked = Boolean(me.unlockedWeapons.rifle);
         localPlayer.weapons.sniper.unlocked = Boolean(me.unlockedWeapons.sniper);
       }
 
       if (localPlayer.state === 'plane' && me.state !== 'plane') {
-        localPlayer.state = me.state;
-        localPlayer.x = me.x;
-        localPlayer.y = me.y;
-        localPlayer.z = me.z;
-        localPlayer.jumpStartAltitude = me.jumpAltitude || PARACHUTE_CONFIG.planeHeightAboveValley;
-        localPlayer.currentDescentSpeed = PARACHUTE_CONFIG.freefallInitialSpeed;
+        localPlayer.forceSyncExitFromServer(me);
       }
     }
   },
@@ -1067,6 +1082,7 @@ localPlayer.onHealCancelledLocal = () => showToast('❌ Curación cancelada');
 localPlayer.onSpawnHealParticles = (x, y, z) => world.spawnHealParticles(x, y, z);
 localPlayer.onSlideChange = (active) => net.sendSlideState(active);
 localPlayer.onSpawnSlideDust = (x, y, z, yaw) => world.spawnSlideDust(x, y, z, yaw);
+localPlayer.onSpawnWaterRipples = (x, z, moving, intensity) => world.spawnWaterRipples(x, z, moving, intensity);
 localPlayer.onBreakWindowRequest = (windowId) => net.requestBreakWindow(windowId);
 localPlayer.onInteractRequest = () => {
   if (!currentInteractable) return;
@@ -1103,11 +1119,13 @@ function sendBotConfigFromSelectors() {
   audio.init();
   const botDifficulty = ui.botDifficultySelect?.value || 'easy';
   const botCount = Number(ui.botCountSelect?.value ?? 6);
-  net.configureBots({ botDifficulty, botCount });
+  const aircraftType = ui.aircraftTypeSelect?.value || 'auto';
+  net.configureBots({ botDifficulty, botCount, aircraftType });
 }
 
 ui.botDifficultySelect?.addEventListener('change', sendBotConfigFromSelectors);
 ui.botCountSelect?.addEventListener('change', sendBotConfigFromSelectors);
+ui.aircraftTypeSelect?.addEventListener('change', sendBotConfigFromSelectors);
 
 ui.btnAddBot.addEventListener('click', () => {
   audio.init();
@@ -1124,14 +1142,16 @@ ui.btnStartSolo.addEventListener('click', () => {
   audio.init();
   const botDifficulty = ui.botDifficultySelect?.value || 'easy';
   const selectedBots = Math.max(1, Number(ui.botCountSelect?.value || 6));
-  net.startGame({ autoFillBots: true, botCount: selectedBots, botDifficulty });
+  const aircraftType = ui.aircraftTypeSelect?.value || 'auto';
+  net.startGame({ autoFillBots: true, botCount: selectedBots, botDifficulty, aircraftType });
 });
 
 ui.btnStartMatch.addEventListener('click', () => {
   audio.init();
   const botDifficulty = ui.botDifficultySelect?.value || 'easy';
   const botCount = Number(ui.botCountSelect?.value ?? 6);
-  net.startGame({ autoFillBots: false, botCount, botDifficulty });
+  const aircraftType = ui.aircraftTypeSelect?.value || 'auto';
+  net.startGame({ autoFillBots: false, botCount, botDifficulty, aircraftType });
 });
 
 ui.btnBackLobby.addEventListener('click', () => {

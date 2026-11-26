@@ -12,6 +12,7 @@ import {
   SLIDE_CONFIG,
   HEAL_CONFIG,
   PARACHUTE_CONFIG,
+  CABIN_DISEMBARK_MS,
   PLAYER_RADIUS,
   PLAYER_HEIGHT,
   PLAYER_CROUCH_HEIGHT,
@@ -30,6 +31,19 @@ import {
   isSwimmingAt,
   getSwimFloatY
 } from '/shared/mapData.js';
+import {
+  buildExternalCharacterRig,
+  solveArmIK
+} from '/Modelos%203D/cocoraModels.js';
+import {
+  createArmasV1WeaponMesh,
+  isSharedArmasV1Geometry
+} from '/Modelos%203D/armasV1.js';
+
+const _ikTargetWorld = new THREE.Vector3();
+const _ikTargetTorso = new THREE.Vector3();
+const _ikPoleL = new THREE.Vector3();
+const _ikPoleR = new THREE.Vector3();
 
 let _sharedToonGradient = null;
 export function getSharedToonGradient() {
@@ -47,49 +61,6 @@ export function getSharedToonGradient() {
   tex.needsUpdate = true;
   _sharedToonGradient = tex;
   return tex;
-}
-
-let _sharedRuanaTexture = null;
-let _sharedSombreroTexture = null;
-
-function getSharedPaisaTextures() {
-  if (!_sharedRuanaTexture) {
-    _sharedRuanaTexture = createProceduralHDTexture(128, (ctx, S) => {
-      // Fondo blanco cálido de lana tejida con franjas negras tradicionales de ruana paisa
-      ctx.fillStyle = '#f8f6f0';
-      ctx.fillRect(0, 0, S, S);
-      ctx.fillStyle = '#ebe6da';
-      for (let y = 0; y < S; y += 4) {
-        ctx.fillRect(0, y, S, 1);
-      }
-      const stripes = [
-        [14, 10, '#18181b'],
-        [28, 4, '#27272a'],
-        [54, 12, '#111827'],
-        [70, 4, '#dc2626'],
-        [94, 10, '#18181b'],
-        [108, 4, '#27272a']
-      ];
-      for (const [sy, sh, col] of stripes) {
-        ctx.fillStyle = col;
-        ctx.fillRect(0, sy, S, sh);
-      }
-    });
-  }
-  if (!_sharedSombreroTexture) {
-    _sharedSombreroTexture = createProceduralHDTexture(128, (ctx, S) => {
-      // Trenzado caña flecha blanco crema y negro del Sombrero Vueltiao
-      ctx.fillStyle = '#f5e8c8';
-      ctx.fillRect(0, 0, S, S);
-      for (let y = 0; y < S; y += 16) {
-        ctx.fillStyle = '#18181b';
-        ctx.fillRect(0, y + 4, S, 6);
-        ctx.fillStyle = '#d6c294';
-        ctx.fillRect(0, y + 12, S, 2);
-      }
-    });
-  }
-  return { ruanaTex: _sharedRuanaTexture, sombreroTex: _sharedSombreroTexture };
 }
 
 export const AVATAR_COLORS = [
@@ -120,6 +91,13 @@ const _camPivot = new THREE.Vector3();
 const _camTarget = new THREE.Vector3();
 const _camPos = new THREE.Vector3();
 const _planeAnchor = new THREE.Vector3();
+
+// Margen de seguridad (0.3 unidades) y estructuras reutilizables para anti-clipping de cámara en 3ra persona
+export const CAMERA_COLLISION_OFFSET = 0.30;
+const _camRaycaster = new THREE.Raycaster();
+const _camRayHits = [];
+const _camNearbyMeshes = [];
+const _camWhiskerOrigin = new THREE.Vector3();
 
 // ==================== MATERIALES PBR / LOW-POLY ESTILIZADOS PARA EL ARSENAL ====================
 let WEAPON_MATERIALS = null;
@@ -196,28 +174,17 @@ function getWeaponMaterials() {
   return WEAPON_MATERIALS;
 }
 
-function createMuzzleFlashMesh(mat, radius) {
-  const g = new THREE.Group();
-  const cone = new THREE.Mesh(new THREE.ConeGeometry(radius, radius * 2.6, 6), mat);
-  cone.rotation.x = Math.PI / 2;
-  cone.position.z = radius * 1.2;
-  const star = new THREE.Mesh(new THREE.OctahedronGeometry(radius * 0.85, 0), mat);
-  g.add(cone, star);
-  g.visible = false;
-  return g;
-}
-
-// Modelos 3D Low-Poly Estilizados con cañones cilíndricos y siluetas claramente reconocibles en escala métrica real
+// Modelos 3D completos de "Armas v1" en escala métrica real (con geometrías y materiales PBR compartidos en caché)
 export function createDetailedWeaponMesh(weaponId, scale = 1.0) {
-  const M = getWeaponMaterials();
-  const root = new THREE.Group();
-  root.scale.setScalar(scale);
-
-  const muzzleTip = new THREE.Object3D();
-  root.add(muzzleTip);
-  root.userData.muzzleTip = muzzleTip;
-
   if (weaponId === 'fists') {
+    const M = getWeaponMaterials();
+    const root = new THREE.Group();
+    root.scale.setScalar(scale);
+
+    const muzzleTip = new THREE.Object3D();
+    root.add(muzzleTip);
+    root.userData.muzzleTip = muzzleTip;
+
     // Machete Cafetero Estilizado (~0.52m)
     const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.022, 0.14, 8), M.walnut);
     grip.rotation.x = Math.PI / 2;
@@ -235,242 +202,7 @@ export function createDetailedWeaponMesh(weaponId, scale = 1.0) {
     return root;
   }
 
-  if (weaponId === 'pistol') {
-    // 1. PISTOLA TÁCTICA 9MM (~0.24m)
-    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.11, 0.052), M.polymer);
-    grip.position.set(0, -0.05, 0.01);
-    grip.rotation.x = -0.24;
-
-    const magGroup = new THREE.Group();
-    const magPlate = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.014, 0.058), M.cyanAccent);
-    magPlate.position.set(0, -0.105, -0.004);
-    magGroup.add(magPlate);
-
-    const frame = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.03, 0.19), M.polymer);
-    frame.position.set(0, 0.006, 0.075);
-
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.20, 10), M.steel);
-    barrel.rotation.x = Math.PI / 2;
-    barrel.position.set(0, 0.034, 0.09);
-
-    const tacLight = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.013, 0.06, 8), M.darkMetal);
-    tacLight.rotation.x = Math.PI / 2;
-    tacLight.position.set(0, -0.014, 0.135);
-
-    const slideGroup = new THREE.Group();
-    const slide = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.038, 0.195), M.gunmetal);
-    slide.position.set(0, 0.036, 0.076);
-    const sightRear = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.012, 0.012), M.tritium);
-    sightRear.position.set(0, 0.06, -0.01);
-    const sightFront = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.012, 0.012), M.tritium);
-    sightFront.position.set(0, 0.06, 0.16);
-    slideGroup.add(slide, sightRear, sightFront);
-
-    root.add(grip, magGroup, frame, barrel, tacLight, slideGroup);
-    muzzleTip.position.set(0, 0.035, 0.20);
-    const flash = createMuzzleFlashMesh(M.muzzleFlash, 0.08);
-    muzzleTip.add(flash);
-    root.userData.slideGroup = slideGroup;
-    root.userData.magGroup = magGroup;
-    root.userData.muzzleFlash = flash;
-    return root;
-  }
-
-  if (weaponId === 'shotgun') {
-    // 2. ESCOPETA DE CORREDERA PUMP-ACTION (~0.86m)
-    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.095, 0.26), M.walnut);
-    stock.position.set(0, -0.025, -0.18);
-    stock.rotation.x = -0.14;
-
-    const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.068, 0.22), M.gunmetal);
-    receiver.position.set(0, 0.022, 0.04);
-
-    // Cartuchos rojos laterales en portacartuchos
-    for (let i = 0; i < 4; i++) {
-      const shell = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.048, 8), M.shellRed);
-      shell.position.set(-0.028, 0.024, -0.02 + i * 0.028);
-      root.add(shell);
-    }
-
-    // Cañón superior largo + tubo cargador inferior paralelo
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.017, 0.56, 12), M.darkMetal);
-    barrel.rotation.x = Math.PI / 2;
-    barrel.position.set(0, 0.042, 0.42);
-
-    const magTube = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.48, 10), M.steel);
-    magTube.rotation.x = Math.PI / 2;
-    magTube.position.set(0, 0.008, 0.38);
-
-    // Guardamanos corredizo de madera estriada (pump forend)
-    const pumpGroup = new THREE.Group();
-    const pump = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.19, 10), M.walnut);
-    pump.rotation.x = Math.PI / 2;
-    pump.position.set(0, 0.008, 0.36);
-    pumpGroup.add(pump);
-
-    root.add(stock, receiver, barrel, magTube, pumpGroup);
-    muzzleTip.position.set(0, 0.042, 0.71);
-    const flash = createMuzzleFlashMesh(M.muzzleFlash, 0.15);
-    muzzleTip.add(flash);
-    root.userData.slideGroup = pumpGroup;
-    root.userData.muzzleFlash = flash;
-    return root;
-  }
-
-  if (weaponId === 'smg') {
-    // 3. SUBFUSIL TÁCTICO SMG (~0.54m con empuñadura frontal y cargador recto extendido)
-    const upper = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.062, 0.28), M.gunmetal);
-    upper.position.set(0, 0.032, 0.08);
-    const accentRail = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.012, 0.24), M.purpleAccent);
-    accentRail.position.set(0, 0.068, 0.08);
-
-    const pistolGrip = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.105, 0.048), M.polymer);
-    pistolGrip.position.set(0, -0.045, -0.01);
-    pistolGrip.rotation.x = -0.22;
-
-    const foreGrip = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.016, 0.095, 8), M.polymer);
-    foreGrip.position.set(0, -0.042, 0.18);
-
-    const magGroup = new THREE.Group();
-    const stickMag = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.21, 0.038), M.darkMetal);
-    stickMag.position.set(0, -0.11, 0.10);
-    stickMag.rotation.x = 0.1;
-    magGroup.add(stickMag);
-
-    const suppressor = new THREE.Mesh(new THREE.CylinderGeometry(0.020, 0.020, 0.18, 12), M.darkMetal);
-    suppressor.rotation.x = Math.PI / 2;
-    suppressor.position.set(0, 0.032, 0.30);
-
-    const wireStock = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.075, 0.14), M.polymer);
-    wireStock.position.set(0, 0.018, -0.12);
-
-    root.add(upper, accentRail, pistolGrip, foreGrip, magGroup, suppressor, wireStock);
-    muzzleTip.position.set(0, 0.032, 0.40);
-    const flash = createMuzzleFlashMesh(M.muzzleFlash, 0.09);
-    muzzleTip.add(flash);
-    root.userData.magGroup = magGroup;
-    root.userData.muzzleFlash = flash;
-    return root;
-  }
-
-  if (weaponId === 'sniper') {
-    // 5. RIFLE DE FRANCOTIRADOR DE CERROJO CON MIRA TELESCÓPICA (~1.12m)
-    const chassis = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.062, 0.42), M.olivePolymer);
-    chassis.position.set(0, 0.018, 0.10);
-
-    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.095, 0.28), M.olivePolymer);
-    stock.position.set(0, 0.008, -0.22);
-    const cheekRest = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.032, 0.15), M.darkMetal);
-    cheekRest.position.set(0, 0.064, -0.20);
-
-    const pistolGrip = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.11, 0.05), M.polymer);
-    pistolGrip.position.set(0, -0.055, -0.03);
-    pistolGrip.rotation.x = -0.24;
-
-    const magGroup = new THREE.Group();
-    const boxMag = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.095, 0.095), M.darkMetal);
-    boxMag.position.set(0, -0.048, 0.10);
-    magGroup.add(boxMag);
-
-    // Cañón flotante largo + freno de boca pesado
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.018, 0.68, 12), M.steel);
-    barrel.rotation.x = Math.PI / 2;
-    barrel.position.set(0, 0.038, 0.56);
-
-    const muzzleBrake = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.034, 0.075), M.darkMetal);
-    muzzleBrake.position.set(0, 0.038, 0.91);
-
-    // Bípode plegado bajo el guardamanos
-    for (const side of [-1, 1]) {
-      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.007, 0.18, 6), M.darkMetal);
-      leg.rotation.x = Math.PI / 2;
-      leg.position.set(side * 0.024, -0.018, 0.36);
-      root.add(leg);
-    }
-
-    // Mira telescópica de doble campana en la parte superior
-    const scopeTube = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.28, 12), M.darkMetal);
-    scopeTube.rotation.x = Math.PI / 2;
-    scopeTube.position.set(0, 0.088, 0.08);
-    const scopeFrontBell = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.017, 0.075, 12), M.gunmetal);
-    scopeFrontBell.rotation.x = Math.PI / 2;
-    scopeFrontBell.position.set(0, 0.088, 0.22);
-    const scopeRearBell = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.022, 0.06, 12), M.gunmetal);
-    scopeRearBell.rotation.x = Math.PI / 2;
-    scopeRearBell.position.set(0, 0.088, -0.06);
-    const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.023, 0.023, 0.005, 12), M.opticGlass);
-    lens.rotation.x = Math.PI / 2;
-    lens.position.set(0, 0.088, 0.258);
-
-    // Cerrojo lateral
-    const boltGroup = new THREE.Group();
-    const boltKnob = new THREE.Mesh(new THREE.SphereGeometry(0.012, 8, 8), M.steel);
-    boltKnob.position.set(-0.038, 0.028, 0.02);
-    boltGroup.add(boltKnob);
-
-    root.add(chassis, stock, cheekRest, pistolGrip, magGroup, barrel, muzzleBrake, scopeTube, scopeFrontBell, scopeRearBell, lens, boltGroup);
-    muzzleTip.position.set(0, 0.038, 0.96);
-    const flash = createMuzzleFlashMesh(M.muzzleFlash, 0.16);
-    muzzleTip.add(flash);
-    root.userData.slideGroup = boltGroup;
-    root.userData.magGroup = magGroup;
-    root.userData.muzzleFlash = flash;
-    return root;
-  }
-
-  // 4. FUSIL DE ASALTO AK/M4 (~0.84m)
-  const upperReceiver = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.056, 0.26), M.gunmetal);
-  upperReceiver.position.set(0, 0.038, 0.06);
-  const lowerReceiver = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.046, 0.22), M.polymer);
-  lowerReceiver.position.set(0, -0.004, 0.05);
-
-  const pistolGrip = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.11, 0.052), M.polymer);
-  pistolGrip.position.set(0, -0.065, -0.025);
-  pistolGrip.rotation.x = -0.26;
-
-  const stockBody = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.078, 0.22), M.walnut);
-  stockBody.position.set(0, 0.018, -0.18);
-
-  const magGroup = new THREE.Group();
-  const magUpper = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.11, 0.065), M.amberAccent);
-  magUpper.position.set(0, -0.075, 0.105);
-  magUpper.rotation.x = 0.18;
-  const magLower = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.10, 0.064), M.amberAccent);
-  magLower.position.set(0, -0.155, 0.128);
-  magLower.rotation.x = 0.30;
-  magGroup.add(magUpper, magLower);
-
-  const handguard = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.030, 0.28, 8), M.walnut);
-  handguard.rotation.x = Math.PI / 2;
-  handguard.position.set(0, 0.034, 0.32);
-
-  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.014, 0.26, 10), M.steel);
-  barrel.rotation.x = Math.PI / 2;
-  barrel.position.set(0, 0.036, 0.56);
-  const muzzleBrake = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.055, 8), M.darkMetal);
-  muzzleBrake.rotation.x = Math.PI / 2;
-  muzzleBrake.position.set(0, 0.036, 0.70);
-
-  // Mira reflex abierta
-  const opticHood = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.034, 0.065), M.darkMetal);
-  opticHood.position.set(0, 0.082, 0.05);
-  const reticleDot = new THREE.Mesh(new THREE.SphereGeometry(0.004, 6, 6), M.holoReticle);
-  reticleDot.position.set(0, 0.084, 0.05);
-
-  const boltGroup = new THREE.Group();
-  const dustCover = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.02, 0.075), M.brass);
-  dustCover.position.set(0, 0.042, 0.08);
-  boltGroup.add(dustCover);
-
-  root.add(upperReceiver, lowerReceiver, boltGroup, pistolGrip, stockBody, magGroup, handguard, barrel, muzzleBrake, opticHood, reticleDot);
-  muzzleTip.position.set(0, 0.036, 0.74);
-  const flash = createMuzzleFlashMesh(M.muzzleFlash, 0.12);
-  muzzleTip.add(flash);
-
-  root.userData.slideGroup = boltGroup;
-  root.userData.magGroup = magGroup;
-  root.userData.muzzleFlash = flash;
-  return root;
+  return createArmasV1WeaponMesh(weaponId, scale);
 }
 
 // Placa flotante sobre enemigos (escala métrica para personaje de 1.80m)
@@ -564,206 +296,45 @@ function createParachuteCanopy() {
   return parachute;
 }
 
-// ==================== AVATAR LOW-POLY ESTILIZADO Y ANATÓMICO DE 1.80M (ADIÓS CABEZAS CUADRADAS) ====================
+// ==================== AVATAR PAISA INTEGRADO DESDE "MODELOS 3D/" (ESCALA 1.80M) ====================
 export function createVoxelAvatar(name, colorIdx = 0, isLocal = false) {
-  const root = new THREE.Group();
-  const pelvisGroup = new THREE.Group();
-  pelvisGroup.position.set(0, 0.90, 0); // Caderas a 0.90m en un cuerpo humano de 1.80m
-  root.add(pelvisGroup);
-
   const shirtHex = AVATAR_COLORS[colorIdx % AVATAR_COLORS.length];
   const toonGrad = getSharedToonGradient();
-  const { ruanaTex, sombreroTex } = getSharedPaisaTextures();
 
-  const skinMat = new THREE.MeshToonMaterial({ color: '#eab68c', gradientMap: toonGrad });
-  const shirtMat = new THREE.MeshToonMaterial({ color: shirtHex, gradientMap: toonGrad });
-  const pantsMat = new THREE.MeshToonMaterial({ color: '#1f242d', gradientMap: toonGrad }); // Pantalón oscuro
-  const bootMat = new THREE.MeshToonMaterial({ color: '#1c1917', gradientMap: toonGrad });  // Botas oscuras
-  const packMat = new THREE.MeshToonMaterial({ color: '#36492f', gradientMap: toonGrad });  // Mochila militar verde
-  const ponchoMat = new THREE.MeshToonMaterial({ map: ruanaTex, color: '#ffffff', gradientMap: toonGrad }); // Ruana blanca con franjas negras
-  const strawMat = new THREE.MeshToonMaterial({ map: sombreroTex, color: '#ffffff', gradientMap: toonGrad }); // Sombrero Vueltiao
-  const darkMat = new THREE.MeshToonMaterial({ color: '#18181b', gradientMap: toonGrad });
-  const outlineMat = new THREE.MeshBasicMaterial({ color: '#111827', side: THREE.BackSide });
-  const hitFlashMats = [skinMat, shirtMat, pantsMat, ponchoMat, packMat];
-  const allAvatarMats = [skinMat, shirtMat, pantsMat, bootMat, packMat, ponchoMat, strawMat, darkMat, outlineMat];
+  const {
+    root,
+    pelvisGroup,
+    torsoGroup,
+    chestGroup,
+    ruanaGroup,
+    ruanaFrontPivot,
+    ruanaBackPivot,
+    backpackGroup,
+    neckGroup,
+    headPivot,
+    leftArm,
+    rightArm,
+    leftLeg,
+    rightLeg,
+    weaponMount,
+    healProp,
+    healCaseMat,
+    healCrossMat,
+    allAvatarMats,
+    hitFlashMats,
+    sharedGeos
+  } = buildExternalCharacterRig(shirtHex, toonGrad);
 
-  // Cuenca pélvica estilizada
-  const pelvisMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.145, 0.135, 0.15, 10), pantsMat);
-  pelvisMesh.scale.set(1.08, 1, 0.78);
-  pelvisMesh.castShadow = true;
-  pelvisMesh.receiveShadow = true;
-  pelvisGroup.add(pelvisMesh);
-
-  // Piernas estilizadas con articulación visible en cadera y rodilla + botas tácticas redondeadas
-  const makeStylizedLeg = (offsetX) => {
-    const hip = new THREE.Group();
-    hip.position.set(offsetX, -0.04, 0);
-
-    const hipJoint = new THREE.Mesh(new THREE.SphereGeometry(0.078, 8, 8), pantsMat);
-    const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.082, 0.068, 0.40, 10), pantsMat);
-    thigh.position.y = -0.21;
-    thigh.castShadow = true;
-    hip.add(hipJoint, thigh);
-
-    const knee = new THREE.Group();
-    knee.position.set(0, -0.42, 0);
-
-    const kneeJoint = new THREE.Mesh(new THREE.SphereGeometry(0.068, 8, 8), darkMat);
-    const shin = new THREE.Mesh(new THREE.CylinderGeometry(0.066, 0.052, 0.36, 10), pantsMat);
-    shin.position.y = -0.19;
-    shin.castShadow = true;
-
-    // Bota táctica con caña y puntera redondeada
-    const bootShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.058, 0.062, 0.12, 10), bootMat);
-    bootShaft.position.set(0, -0.38, 0);
-    const bootFoot = new THREE.Mesh(new THREE.SphereGeometry(0.068, 10, 8), bootMat);
-    bootFoot.scale.set(0.92, 0.65, 1.55);
-    bootFoot.position.set(0, -0.41, 0.038);
-    bootFoot.castShadow = true;
-
-    knee.add(kneeJoint, shin, bootShaft, bootFoot);
-    hip.add(knee);
-    return { hip, knee };
-  };
-
-  const leftLeg = makeStylizedLeg(0.105);
-  const rightLeg = makeStylizedLeg(-0.105);
-  pelvisGroup.add(leftLeg.hip, rightLeg.hip);
-
-  // Torso anatómico estilizado en V + Ruana colombiana ligera + Mochila táctica detallada
-  const torsoGroup = new THREE.Group();
-  torsoGroup.position.set(0, 0.05, 0);
-  pelvisGroup.add(torsoGroup);
-
-  const chestMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.185, 0.142, 0.48, 12), shirtMat);
-  chestMesh.scale.set(1.08, 1.0, 0.72);
-  chestMesh.position.y = 0.24;
-  chestMesh.castShadow = true;
-  torsoGroup.add(chestMesh);
-
-  // Ruana / Poncho Paisa rayado blanco con franjas negras y contorno cel-shaded sobre los hombros
-  const ruana = new THREE.Mesh(new THREE.ConeGeometry(0.285, 0.34, 14, 1, true), ponchoMat);
-  ruana.scale.set(1.10, 1.0, 0.82);
-  ruana.position.y = 0.34;
-  ruana.castShadow = true;
-  ruana.receiveShadow = true;
-  const ruanaOutline = new THREE.Mesh(new THREE.ConeGeometry(0.296, 0.352, 14, 1, true), outlineMat);
-  ruanaOutline.scale.set(1.10, 1.0, 0.82);
-  ruanaOutline.position.y = 0.34;
-  torsoGroup.add(ruana, ruanaOutline);
-
-  // Botiquín 3D sostenido al frente durante la animación canalizada de 2.0 segundos
-  const healProp = new THREE.Group();
-  const healCaseMat = new THREE.MeshLambertMaterial({ color: '#f8fafc' });
-  const healCrossMat = new THREE.MeshLambertMaterial({ color: '#10b981' });
-  const healBox = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.14, 0.18), healCaseMat);
-  const hCross1 = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.025, 0.045), healCrossMat);
-  hCross1.position.y = 0.075;
-  const hCross2 = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.025, 0.13), healCrossMat);
-  hCross2.position.y = 0.075;
-  healProp.add(healBox, hCross1, hCross2);
-  healProp.position.set(0, 0.15, 0.29);
-  healProp.rotation.x = 0.35;
-  healProp.visible = false;
-  torsoGroup.add(healProp);
-
-  // Mochila militar verde detallada en la espalda (-Z) con bolsillos y correas
-  const backpack = new THREE.Group();
-  backpack.position.set(0, 0.27, -0.175);
-  const packBody = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.35, 0.14), packMat);
-  packBody.castShadow = true;
-  packBody.receiveShadow = true;
-  const packOutline = new THREE.Mesh(new THREE.BoxGeometry(0.276, 0.366, 0.156), outlineMat);
-  const bedroll = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.28, 10), darkMat);
-  bedroll.rotation.z = Math.PI / 2;
-  bedroll.position.set(0, 0.20, 0);
-  bedroll.castShadow = true;
-  const pouch = new THREE.Mesh(new THREE.BoxGeometry(0.21, 0.15, 0.055), packMat);
-  pouch.position.set(0, -0.04, -0.085);
-  pouch.castShadow = true;
-  backpack.add(packBody, packOutline, bedroll, pouch);
-  torsoGroup.add(backpack);
-
-  // Cuello y Cabeza Ovalada Estilizada + Sombrero Vueltiao Colombiano con contorno definido
-  const headPivot = new THREE.Group();
-  headPivot.position.set(0, 0.50, 0);
-
-  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.065, 0.09, 8), skinMat);
-  neck.position.y = 0.04;
-  headPivot.add(neck);
-
-  const headOval = new THREE.Mesh(new THREE.SphereGeometry(0.125, 14, 12), skinMat);
-  headOval.scale.set(0.92, 1.10, 0.98);
-  headOval.position.y = 0.175;
-  headOval.castShadow = true;
-  const headOutline = new THREE.Mesh(new THREE.SphereGeometry(0.133, 14, 12), outlineMat);
-  headOutline.scale.set(0.92, 1.10, 0.98);
-  headOutline.position.y = 0.175;
-  headPivot.add(headOval, headOutline);
-
-  // Ojos estilizados
-  const eyeGeo = new THREE.SphereGeometry(0.016, 6, 6);
-  const eyeL = new THREE.Mesh(eyeGeo, darkMat);
-  eyeL.position.set(0.042, 0.185, 0.112);
-  const eyeR = eyeL.clone();
-  eyeR.position.x = -0.042;
-  headPivot.add(eyeL, eyeR);
-
-  // Sombrero Vueltiao tradicional en todos los combatientes con cinta de color identificativo
-  const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.255, 0.27, 0.020, 18), strawMat);
-  brim.position.y = 0.272;
-  brim.castShadow = true;
-  const brimOutline = new THREE.Mesh(new THREE.CylinderGeometry(0.266, 0.281, 0.028, 18), outlineMat);
-  brimOutline.position.y = 0.272;
-  const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.108, 0.136, 0.108, 14), strawMat);
-  crown.position.y = 0.33;
-  crown.castShadow = true;
-  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.138, 0.140, 0.028, 14), shirtMat);
-  band.position.y = 0.292;
-  headPivot.add(brim, brimOutline, crown, band);
-  torsoGroup.add(headPivot);
-
-  // Brazos estilizados con articulaciones esféricas visibles en hombros y codos
-  const makeStylizedArm = (offsetX) => {
-    const shoulder = new THREE.Group();
-    shoulder.position.set(offsetX, 0.44, 0);
-
-    const shoulderJoint = new THREE.Mesh(new THREE.SphereGeometry(0.064, 8, 8), shirtMat);
-    const upperArm = new THREE.Mesh(new THREE.CylinderGeometry(0.056, 0.048, 0.27, 10), shirtMat);
-    upperArm.position.y = -0.14;
-    shoulder.add(shoulderJoint, upperArm);
-
-    const elbow = new THREE.Group();
-    elbow.position.set(0, -0.28, 0);
-
-    const elbowJoint = new THREE.Mesh(new THREE.SphereGeometry(0.048, 8, 8), skinMat);
-    const forearm = new THREE.Mesh(new THREE.CylinderGeometry(0.046, 0.038, 0.25, 10), skinMat);
-    forearm.position.y = -0.13;
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.044, 8, 8), skinMat);
-    hand.position.y = -0.265;
-    elbow.add(elbowJoint, forearm, hand);
-    shoulder.add(elbow);
-
-    return { shoulder, elbow };
-  };
-
-  const leftArm = makeStylizedArm(0.245);
-  const rightArm = makeStylizedArm(-0.245);
-  torsoGroup.add(leftArm.shoulder, rightArm.shoulder);
-
-  // Montura de las 5 armas + machete en la mano derecha
-  const weaponMount = new THREE.Group();
-  weaponMount.position.set(0.02, -0.265, 0.05);
-  weaponMount.rotation.x = Math.PI / 2;
-  rightArm.elbow.add(weaponMount);
-
+  // Montura de las 7 armas de "Armas v1" + machete anclada exactamente al agarre de la mano derecha (rightArm.hand)
   const weapons = {
     fists: createDetailedWeaponMesh('fists', 0.92),
-    pistol: createDetailedWeaponMesh('pistol', 0.95),
-    shotgun: createDetailedWeaponMesh('shotgun', 0.88),
-    smg: createDetailedWeaponMesh('smg', 0.90),
-    rifle: createDetailedWeaponMesh('rifle', 0.88),
-    sniper: createDetailedWeaponMesh('sniper', 0.86)
+    pistol: createDetailedWeaponMesh('pistol', 0.96),
+    revolver: createDetailedWeaponMesh('revolver', 0.95),
+    shotgun: createDetailedWeaponMesh('shotgun', 0.90),
+    smg: createDetailedWeaponMesh('smg', 0.92),
+    assault_rifle: createDetailedWeaponMesh('assault_rifle', 0.92),
+    rifle: createDetailedWeaponMesh('rifle', 0.93),
+    sniper: createDetailedWeaponMesh('sniper', 0.88)
   };
   for (const [k, m] of Object.entries(weapons)) {
     m.visible = k === 'fists';
@@ -811,7 +382,13 @@ export function createVoxelAvatar(name, colorIdx = 0, isLocal = false) {
           child.material.dispose();
           return;
         }
-        if (child.geometry) child.geometry.dispose();
+        if (
+          child.geometry &&
+          !sharedGeos.has(child.geometry) &&
+          !isSharedArmasV1Geometry(child.geometry)
+        ) {
+          child.geometry.dispose();
+        }
       });
       for (let i = 0; i < allAvatarMats.length; i++) {
         allAvatarMats[i].dispose();
@@ -898,157 +475,314 @@ export function createVoxelAvatar(name, colorIdx = 0, isLocal = false) {
       } else if (flash) {
         flash.visible = false;
       }
+      const slideGrp = activeW?.userData?.slideGroup;
+      if (slideGrp && !activeW.userData.isRevolver) {
+        slideGrp.position.z = -st.recoilAmount * 0.042;
+      }
 
       const speed = 13;
 
-      // Nado: crol al avanzar (cuerpo inclinado, brazadas alternas, patada) y pataleo vertical
-      // en el sitio. El arma va guardada.
-      if (moveMode === 'swim' || moveMode === 'swim_fast' || moveMode === 'swim_idle') {
+      // Nado ("swimming" / swim / swim_fast / swim_idle): crol fluido con brazadas alternas, pataleo con tobillo
+      // extendido y flotabilidad horizontal; o pataleo vertical suave al mantenerse en el sitio. El arma va guardada.
+      const isSwimPose =
+        state === 'swimming' ||
+        moveMode === 'swimming' ||
+        moveMode === 'swim' ||
+        moveMode === 'swim_fast' ||
+        moveMode === 'swim_idle';
+
+      if (isSwimPose) {
         weaponMount.visible = false;
         const moving = moveMode !== 'swim_idle';
         const stroke = walkPhase;
-        pelvisGroup.position.y = damp(pelvisGroup.position.y, moving ? 1.0 : 0.9, 8, dt);
-        pelvisGroup.rotation.x = damp(pelvisGroup.rotation.x, moving ? 1.05 : 0.12, 6, dt);
+        pelvisGroup.position.y = damp(pelvisGroup.position.y, moving ? 1.02 : 0.90, 8, dt);
+        pelvisGroup.rotation.set(
+          damp(pelvisGroup.rotation.x, moving ? 1.08 : 0.14, 7, dt),
+          damp(pelvisGroup.rotation.y || 0, moving ? Math.sin(stroke) * 0.08 : 0, 8, dt),
+          damp(pelvisGroup.rotation.z || 0, moving ? Math.cos(stroke) * 0.06 : 0, 8, dt)
+        );
         torsoGroup.rotation.set(
-          damp(torsoGroup.rotation.x, moving ? 0.12 : 0.04, 8, dt),
-          damp(torsoGroup.rotation.y, moving ? Math.sin(stroke) * 0.22 : 0, 8, dt),
+          damp(torsoGroup.rotation.x, moving ? 0.10 : 0.04, 8, dt),
+          damp(torsoGroup.rotation.y, moving ? Math.sin(stroke) * 0.24 : 0, 8, dt),
           damp(torsoGroup.rotation.z, 0, 8, dt)
         );
+        if (ruanaFrontPivot) ruanaFrontPivot.rotation.x = damp(ruanaFrontPivot.rotation.x, moving ? 0.16 : 0.06, 8, dt);
+        if (ruanaBackPivot) ruanaBackPivot.rotation.x = damp(ruanaBackPivot.rotation.x, moving ? -0.38 : -0.14, 8, dt);
+        if (neckGroup) neckGroup.rotation.set(damp(neckGroup.rotation.x, moving ? -0.32 : -0.05, 8, dt), 0, 0);
+
         if (moving) {
-          // Brazadas de crol: un brazo pasa por encima mientras el otro empuja bajo el agua
           rightArm.shoulder.rotation.set(-1.55 + Math.sin(stroke) * 1.55, 0, -0.18);
           leftArm.shoulder.rotation.set(-1.55 - Math.sin(stroke) * 1.55, 0, 0.18);
-          rightArm.elbow.rotation.x = damp(rightArm.elbow.rotation.x, -0.25 - Math.max(0, Math.cos(stroke)) * 0.7, 14, dt);
-          leftArm.elbow.rotation.x = damp(leftArm.elbow.rotation.x, -0.25 - Math.max(0, -Math.cos(stroke)) * 0.7, 14, dt);
-          const kick = Math.sin(stroke * 3) * 0.32;
-          leftLeg.hip.rotation.x = damp(leftLeg.hip.rotation.x, kick, 18, dt);
-          rightLeg.hip.rotation.x = damp(rightLeg.hip.rotation.x, -kick, 18, dt);
-          leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, 0.2 + Math.max(0, kick), 18, dt);
-          rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, 0.2 + Math.max(0, -kick), 18, dt);
-          headPivot.rotation.x = damp(headPivot.rotation.x, -0.85, 10, dt);
+          rightArm.elbow.rotation.set(damp(rightArm.elbow.rotation.x, -0.25 - Math.max(0, Math.cos(stroke)) * 0.72, 14, dt), 0, 0);
+          leftArm.elbow.rotation.set(damp(leftArm.elbow.rotation.x, -0.25 - Math.max(0, -Math.cos(stroke)) * 0.72, 14, dt), 0, 0);
+          const kick = Math.sin(stroke * 3) * 0.34;
+          leftLeg.hip.rotation.set(damp(leftLeg.hip.rotation.x, kick, 18, dt), 0, 0.04);
+          rightLeg.hip.rotation.set(damp(rightLeg.hip.rotation.x, -kick, 18, dt), 0, -0.04);
+          leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, 0.22 + Math.max(0, kick), 18, dt);
+          rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, 0.22 + Math.max(0, -kick), 18, dt);
+          if (leftLeg.ankle) leftLeg.ankle.rotation.x = damp(leftLeg.ankle.rotation.x, 0.42, 14, dt);
+          if (rightLeg.ankle) rightLeg.ankle.rotation.x = damp(rightLeg.ankle.rotation.x, 0.42, 14, dt);
+          headPivot.rotation.set(damp(headPivot.rotation.x, -0.68, 10, dt), Math.sin(stroke) * 0.14, 0);
         } else {
-          // Mantenerse a flote: brazos barriendo a los lados y piernas pedaleando
           const tread = Math.sin(st.breathClock * 2.6);
-          rightArm.shoulder.rotation.set(-0.55 + tread * 0.2, 0, -0.75 - tread * 0.3);
-          leftArm.shoulder.rotation.set(-0.55 - tread * 0.2, 0, 0.75 + tread * 0.3);
-          rightArm.elbow.rotation.x = damp(rightArm.elbow.rotation.x, -0.5, 10, dt);
-          leftArm.elbow.rotation.x = damp(leftArm.elbow.rotation.x, -0.5, 10, dt);
-          leftLeg.hip.rotation.x = damp(leftLeg.hip.rotation.x, -0.35 + tread * 0.35, 10, dt);
-          rightLeg.hip.rotation.x = damp(rightLeg.hip.rotation.x, -0.35 - tread * 0.35, 10, dt);
-          leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, 0.75, 10, dt);
-          rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, 0.75, 10, dt);
-          headPivot.rotation.x = damp(headPivot.rotation.x, -pitch * 0.5, 10, dt);
+          rightArm.shoulder.rotation.set(-0.55 + tread * 0.22, 0, -0.75 - tread * 0.28);
+          leftArm.shoulder.rotation.set(-0.55 - tread * 0.22, 0, 0.75 + tread * 0.28);
+          rightArm.elbow.rotation.set(damp(rightArm.elbow.rotation.x, -0.52, 10, dt), 0, 0);
+          leftArm.elbow.rotation.set(damp(leftArm.elbow.rotation.x, -0.52, 10, dt), 0, 0);
+          leftLeg.hip.rotation.set(damp(leftLeg.hip.rotation.x, -0.35 + tread * 0.35, 10, dt), 0, 0.06);
+          rightLeg.hip.rotation.set(damp(rightLeg.hip.rotation.x, -0.35 - tread * 0.35, 10, dt), 0, -0.06);
+          leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, 0.78, 10, dt);
+          rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, 0.78, 10, dt);
+          if (leftLeg.ankle) leftLeg.ankle.rotation.x = damp(leftLeg.ankle.rotation.x, 0.24 - tread * 0.18, 10, dt);
+          if (rightLeg.ankle) rightLeg.ankle.rotation.x = damp(rightLeg.ankle.rotation.x, 0.24 + tread * 0.18, 10, dt);
+          headPivot.rotation.set(damp(headPivot.rotation.x, -pitch * 0.5, 10, dt), 0, 0);
         }
         return;
+      }
+
+      if (state === 'plane') {
+        if (moveMode === 'stand') {
+          // 1. Levantarse suavemente desde el banco lateral de la bodega (~0.35s)
+          const u = Math.max(0, Math.min(1, walkPhase / 1.6));
+          pelvisGroup.position.y = damp(pelvisGroup.position.y, 0.50 + u * 0.46, 14, dt);
+          pelvisGroup.rotation.set(damp(pelvisGroup.rotation.x, 0.14 * (1 - u), 14, dt), 0, 0);
+          torsoGroup.rotation.set(damp(torsoGroup.rotation.x, 0.28 - u * 0.18, 14, dt), 0, 0);
+          if (ruanaFrontPivot) ruanaFrontPivot.rotation.x = damp(ruanaFrontPivot.rotation.x, 0.26 - u * 0.18, 14, dt);
+          if (ruanaBackPivot) ruanaBackPivot.rotation.x = damp(ruanaBackPivot.rotation.x, -0.06, 14, dt);
+          if (neckGroup) neckGroup.rotation.set(0, 0, 0);
+
+          const hipTarget = -1.48 + u * 1.38;
+          const kneeTarget = 1.52 - u * 1.38;
+          leftLeg.hip.rotation.set(damp(leftLeg.hip.rotation.x, hipTarget, 14, dt), 0, 0.05);
+          leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, kneeTarget, 14, dt);
+          rightLeg.hip.rotation.set(damp(rightLeg.hip.rotation.x, hipTarget + 0.08 * u, 14, dt), 0, -0.05);
+          rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, kneeTarget, 14, dt);
+          if (leftLeg.ankle) leftLeg.ankle.rotation.x = damp(leftLeg.ankle.rotation.x, -0.10 * u, 14, dt);
+          if (rightLeg.ankle) rightLeg.ankle.rotation.x = damp(rightLeg.ankle.rotation.x, -0.10 * u, 14, dt);
+
+          leftArm.shoulder.rotation.set(damp(leftArm.shoulder.rotation.x, -0.45 + u * 0.15, 14, dt), 0, 0.10);
+          leftArm.elbow.rotation.set(damp(leftArm.elbow.rotation.x, -0.85 + u * 0.30, 14, dt), 0, 0);
+          rightArm.shoulder.rotation.set(damp(rightArm.shoulder.rotation.x, -0.45 + u * 0.15, 14, dt), 0, -0.10);
+          rightArm.elbow.rotation.set(damp(rightArm.elbow.rotation.x, -0.85 + u * 0.30, 14, dt), 0, 0);
+          headPivot.rotation.set(damp(headPivot.rotation.x, 0.05 * (1 - u), 14, dt), 0, 0);
+          return;
+        }
+
+        if (moveMode === 'walk_cabin') {
+          // 2. Avanzar por el pasillo central antideslizante hacia el borde de la rampa trasera abierta
+          const sPhi = Math.sin(walkPhase);
+          const cPhi = Math.cos(walkPhase);
+          const thL = -0.52 * sPhi;
+          const thR = 0.52 * sPhi;
+          const kneeL = 0.12 + 0.92 * Math.pow(Math.max(0, cPhi), 1.4);
+          const kneeR = 0.12 + 0.92 * Math.pow(Math.max(0, -cPhi), 1.4);
+
+          pelvisGroup.position.y = damp(pelvisGroup.position.y, 0.95 - 0.03 * sPhi * sPhi, 16, dt);
+          pelvisGroup.rotation.set(damp(pelvisGroup.rotation.x, 0.08, 14, dt), 0.06 * sPhi, 0);
+          torsoGroup.rotation.set(damp(torsoGroup.rotation.x, 0.14, 14, dt), -0.05 * sPhi, 0);
+          if (ruanaFrontPivot) ruanaFrontPivot.rotation.x = damp(ruanaFrontPivot.rotation.x, 0.12, 14, dt);
+          if (ruanaBackPivot) ruanaBackPivot.rotation.x = damp(ruanaBackPivot.rotation.x, -0.18, 14, dt);
+          if (neckGroup) neckGroup.rotation.set(-0.04, 0, 0);
+
+          leftLeg.hip.rotation.set(damp(leftLeg.hip.rotation.x, thL, 18, dt), 0, 0.04);
+          leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, kneeL, 18, dt);
+          rightLeg.hip.rotation.set(damp(rightLeg.hip.rotation.x, thR, 18, dt), 0, -0.04);
+          rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, kneeR, 18, dt);
+          if (leftLeg.ankle) leftLeg.ankle.rotation.x = damp(leftLeg.ankle.rotation.x, -(thL + kneeL) * 0.55, 16, dt);
+          if (rightLeg.ankle) rightLeg.ankle.rotation.x = damp(rightLeg.ankle.rotation.x, -(thR + kneeR) * 0.55, 16, dt);
+
+          leftArm.shoulder.rotation.set(damp(leftArm.shoulder.rotation.x, -0.35 - 0.42 * sPhi, 16, dt), 0, 0.08);
+          leftArm.elbow.rotation.set(damp(leftArm.elbow.rotation.x, -0.62, 16, dt), 0, 0);
+          rightArm.shoulder.rotation.set(damp(rightArm.shoulder.rotation.x, -0.45 + 0.36 * sPhi, 16, dt), 0, -0.08);
+          rightArm.elbow.rotation.set(damp(rightArm.elbow.rotation.x, -0.68, 16, dt), 0, 0);
+          headPivot.rotation.set(damp(headPivot.rotation.x, -0.04, 14, dt), 0, 0);
+          return;
+        }
+
+        if (moveMode === 'ramp_jump') {
+          // 3. Salto atlético desde el labio de la rampa hacia el vacío antes de desacoplarse a skydiving
+          pelvisGroup.position.y = damp(pelvisGroup.position.y, 0.92, 18, dt);
+          pelvisGroup.rotation.set(damp(pelvisGroup.rotation.x, 0.48, 18, dt), 0, 0);
+          torsoGroup.rotation.set(damp(torsoGroup.rotation.x, 0.28, 18, dt), 0, 0);
+          if (ruanaFrontPivot) ruanaFrontPivot.rotation.x = damp(ruanaFrontPivot.rotation.x, -0.18, 18, dt);
+          if (ruanaBackPivot) ruanaBackPivot.rotation.x = damp(ruanaBackPivot.rotation.x, -0.62, 18, dt);
+          if (neckGroup) neckGroup.rotation.set(-0.22, 0, 0);
+
+          leftLeg.hip.rotation.set(damp(leftLeg.hip.rotation.x, -0.92, 18, dt), 0, 0.12);
+          leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, 1.24, 18, dt);
+          rightLeg.hip.rotation.set(damp(rightLeg.hip.rotation.x, 0.38, 18, dt), 0, -0.12);
+          rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, 0.32, 18, dt);
+          if (leftLeg.ankle) leftLeg.ankle.rotation.x = damp(leftLeg.ankle.rotation.x, 0.35, 18, dt);
+          if (rightLeg.ankle) rightLeg.ankle.rotation.x = damp(rightLeg.ankle.rotation.x, 0.45, 18, dt);
+
+          leftArm.shoulder.rotation.set(damp(leftArm.shoulder.rotation.x, -1.55, 18, dt), 0, -0.42);
+          leftArm.elbow.rotation.set(damp(leftArm.elbow.rotation.x, -0.35, 18, dt), 0, 0);
+          rightArm.shoulder.rotation.set(damp(rightArm.shoulder.rotation.x, -1.55, 18, dt), 0, 0.42);
+          rightArm.elbow.rotation.set(damp(rightArm.elbow.rotation.x, -0.35, 18, dt), 0, 0);
+          headPivot.rotation.set(damp(headPivot.rotation.x, -0.24, 18, dt), 0, 0);
+          st.wasAirborne = true;
+          return;
+        }
       }
 
       if (state === 'plane' || moveMode === 'seated') {
         const turb = Math.sin(st.breathClock * 1.4) * 0.035;
         pelvisGroup.position.y = damp(pelvisGroup.position.y, 0.50, speed, dt);
-        pelvisGroup.rotation.x = damp(pelvisGroup.rotation.x, 0, speed, dt);
+        pelvisGroup.rotation.set(damp(pelvisGroup.rotation.x, 0, speed, dt), 0, 0);
         torsoGroup.rotation.set(
           damp(torsoGroup.rotation.x, 0.06 + turb, speed, dt),
           0,
           damp(torsoGroup.rotation.z, turb * 1.1, speed, dt)
         );
-        leftLeg.hip.rotation.x = damp(leftLeg.hip.rotation.x, -1.48, speed, dt);
+        if (ruanaFrontPivot) ruanaFrontPivot.rotation.x = damp(ruanaFrontPivot.rotation.x, 0.28, speed, dt);
+        if (ruanaBackPivot) ruanaBackPivot.rotation.x = damp(ruanaBackPivot.rotation.x, -0.04, speed, dt);
+        if (neckGroup) neckGroup.rotation.set(0, 0, 0);
+        leftLeg.hip.rotation.set(damp(leftLeg.hip.rotation.x, -1.48, speed, dt), 0, 0.05);
         leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, 1.52, speed, dt);
-        rightLeg.hip.rotation.x = damp(rightLeg.hip.rotation.x, -1.48, speed, dt);
+        rightLeg.hip.rotation.set(damp(rightLeg.hip.rotation.x, -1.48, speed, dt), 0, -0.05);
         rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, 1.52, speed, dt);
+        if (leftLeg.ankle) leftLeg.ankle.rotation.x = damp(leftLeg.ankle.rotation.x, 0, speed, dt);
+        if (rightLeg.ankle) rightLeg.ankle.rotation.x = damp(rightLeg.ankle.rotation.x, 0, speed, dt);
 
         leftArm.shoulder.rotation.set(damp(leftArm.shoulder.rotation.x, -0.45, speed, dt), 0, 0.08);
-        leftArm.elbow.rotation.x = damp(leftArm.elbow.rotation.x, -0.95, speed, dt);
+        leftArm.elbow.rotation.set(damp(leftArm.elbow.rotation.x, -0.95, speed, dt), 0, 0);
         rightArm.shoulder.rotation.set(damp(rightArm.shoulder.rotation.x, -0.45, speed, dt), 0, -0.08);
-        rightArm.elbow.rotation.x = damp(rightArm.elbow.rotation.x, -0.95, speed, dt);
-        headPivot.rotation.x = damp(headPivot.rotation.x, -pitch * 0.5, speed, dt);
+        rightArm.elbow.rotation.set(damp(rightArm.elbow.rotation.x, -0.95, speed, dt), 0, 0);
+        headPivot.rotation.set(damp(headPivot.rotation.x, -pitch * 0.5, speed, dt), 0, 0);
         return;
       }
 
       if (state === 'skydiving') {
+        // Animación v2 ('fall'): caída libre en arco de paracaidista con aleteo independiente de ruanaF y ruanaB
+        const t = st.breathClock * 0.44;
         const flutter = Math.sin(st.breathClock * 8) * 0.075;
-        pelvisGroup.position.y = damp(pelvisGroup.position.y, 0.85, speed, dt);
-        pelvisGroup.rotation.x = damp(pelvisGroup.rotation.x, 0.92 - pitch * 0.35, 10, dt);
-        torsoGroup.rotation.set(0, 0, flutter * 0.5);
+        pelvisGroup.position.y = damp(pelvisGroup.position.y, 0.86, speed, dt);
+        pelvisGroup.rotation.set(damp(pelvisGroup.rotation.x, 1.05 - pitch * 0.32, 10, dt), 0, 0);
+        torsoGroup.rotation.set(damp(torsoGroup.rotation.x, -0.22, 10, dt), 0, flutter * 0.5);
+        if (neckGroup) neckGroup.rotation.set(damp(neckGroup.rotation.x, -0.35, 10, dt), 0, 0);
+        headPivot.rotation.set(damp(headPivot.rotation.x, -0.28, 10, dt), 0, 0);
 
-        leftArm.shoulder.rotation.set(damp(leftArm.shoulder.rotation.x, -2.2 + flutter, 10, dt), 0, -0.5);
-        leftArm.elbow.rotation.x = damp(leftArm.elbow.rotation.x, -0.35, 10, dt);
-        rightArm.shoulder.rotation.set(damp(rightArm.shoulder.rotation.x, -2.2 - flutter, 10, dt), 0, 0.5);
-        rightArm.elbow.rotation.x = damp(rightArm.elbow.rotation.x, -0.35, 10, dt);
+        if (ruanaFrontPivot) ruanaFrontPivot.rotation.x = damp(ruanaFrontPivot.rotation.x, -0.46 + 0.10 * Math.sin(t * 13), 14, dt);
+        if (ruanaBackPivot) ruanaBackPivot.rotation.x = damp(ruanaBackPivot.rotation.x, -0.76 + 0.10 * Math.sin(t * 11), 14, dt);
 
-        leftLeg.hip.rotation.x = damp(leftLeg.hip.rotation.x, 0.25 + flutter, 10, dt);
-        leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, 0.45, 10, dt);
-        rightLeg.hip.rotation.x = damp(rightLeg.hip.rotation.x, 0.15 - flutter, 10, dt);
-        rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, 0.55, 10, dt);
+        leftArm.shoulder.rotation.set(damp(leftArm.shoulder.rotation.x, -2.18 + flutter, 10, dt), 0, -0.52);
+        leftArm.elbow.rotation.set(damp(leftArm.elbow.rotation.x, -0.38, 10, dt), 0, 0);
+        rightArm.shoulder.rotation.set(damp(rightArm.shoulder.rotation.x, -2.18 - flutter, 10, dt), 0, 0.52);
+        rightArm.elbow.rotation.set(damp(rightArm.elbow.rotation.x, -0.38, 10, dt), 0, 0);
+
+        leftLeg.hip.rotation.set(damp(leftLeg.hip.rotation.x, 0.25, 10, dt), 0, 0.18);
+        leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, 0.90 + 0.10 * Math.sin(t * 7), 10, dt);
+        rightLeg.hip.rotation.set(damp(rightLeg.hip.rotation.x, 0.25, 10, dt), 0, -0.18);
+        rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, 0.90 + 0.10 * Math.sin(t * 7 + 2), 10, dt);
+        if (leftLeg.ankle) leftLeg.ankle.rotation.x = damp(leftLeg.ankle.rotation.x, 0.40, 10, dt);
+        if (rightLeg.ankle) rightLeg.ankle.rotation.x = damp(rightLeg.ankle.rotation.x, 0.40, 10, dt);
         st.wasAirborne = true;
         return;
       }
 
       if (state === 'parachuting') {
+        // Animación v2 ('parachute'): manos en las bandas resueltas con IK analítico de 2 huesos (solveArmIK)
         const sway = Math.sin(st.breathClock * 1.3) * 0.05;
         pelvisGroup.position.y = damp(pelvisGroup.position.y, 0.88, speed, dt);
-        pelvisGroup.rotation.x = damp(pelvisGroup.rotation.x, 0.06, speed, dt);
-        torsoGroup.rotation.set(0.04, 0, sway);
+        pelvisGroup.rotation.set(damp(pelvisGroup.rotation.x, 0.05 + sway, speed, dt), 0, sway * 0.6);
+        torsoGroup.rotation.set(damp(torsoGroup.rotation.x, -0.04, speed, dt), 0, sway);
         parachute.rotation.z = sway;
+        if (ruanaFrontPivot) ruanaFrontPivot.rotation.x = damp(ruanaFrontPivot.rotation.x, -0.06 + sway * 0.8, 10, dt);
+        if (ruanaBackPivot) ruanaBackPivot.rotation.x = damp(ruanaBackPivot.rotation.x, 0.04, 10, dt);
+        if (neckGroup) neckGroup.rotation.set(damp(neckGroup.rotation.x, -0.12, speed, dt), 0, 0);
 
-        leftArm.shoulder.rotation.set(damp(leftArm.shoulder.rotation.x, -2.72, speed, dt), 0, 0.16);
-        leftArm.elbow.rotation.x = damp(leftArm.elbow.rotation.x, -0.28, speed, dt);
-        rightArm.shoulder.rotation.set(damp(rightArm.shoulder.rotation.x, -2.72, speed, dt), 0, -0.16);
-        rightArm.elbow.rotation.x = damp(rightArm.elbow.rotation.x, -0.28, speed, dt);
+        _ikTargetTorso.set(0.30, 0.94, 0.06);
+        _ikPoleL.set(1.0, -0.3, 0);
+        solveArmIK(leftArm.shoulder, leftArm.elbow, _ikTargetTorso, _ikPoleL, 0.28, 0.31);
 
-        leftLeg.hip.rotation.x = damp(leftLeg.hip.rotation.x, 0.14, speed, dt);
-        leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, 0.32, speed, dt);
-        rightLeg.hip.rotation.x = damp(rightLeg.hip.rotation.x, 0.22, speed, dt);
-        rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, 0.38, speed, dt);
-        headPivot.rotation.x = damp(headPivot.rotation.x, -pitch * 0.5, speed, dt);
+        _ikTargetTorso.set(-0.30, 0.94, 0.06);
+        _ikPoleR.set(-1.0, -0.3, 0);
+        solveArmIK(rightArm.shoulder, rightArm.elbow, _ikTargetTorso, _ikPoleR, 0.28, 0.31);
+
+        leftLeg.hip.rotation.set(damp(leftLeg.hip.rotation.x, -0.30, speed, dt), 0, 0.08);
+        leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, 0.40, speed, dt);
+        rightLeg.hip.rotation.set(damp(rightLeg.hip.rotation.x, -0.12, speed, dt), 0, -0.08);
+        rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, 0.25, speed, dt);
+        if (leftLeg.ankle) leftLeg.ankle.rotation.x = damp(leftLeg.ankle.rotation.x, 0.35, speed, dt);
+        if (rightLeg.ankle) rightLeg.ankle.rotation.x = damp(rightLeg.ankle.rotation.x, 0.30, speed, dt);
+        headPivot.rotation.set(damp(headPivot.rotation.x, -0.15 - pitch * 0.35, speed, dt), sway * 0.8, 0);
         st.wasAirborne = true;
         return;
       }
 
-      pelvisGroup.rotation.x = damp(pelvisGroup.rotation.x, 0, speed, dt);
+      pelvisGroup.rotation.set(
+        damp(pelvisGroup.rotation.x, 0, speed, dt),
+        damp(pelvisGroup.rotation.y || 0, 0, speed, dt),
+        damp(pelvisGroup.rotation.z || 0, 0, speed, dt)
+      );
 
       if (moveMode === 'vault') {
-        // Animación Parkour Vaulting: mano izquierda apoyada al frente sobre el obstáculo y piernas pasando de lado
-        pelvisGroup.position.y = damp(pelvisGroup.position.y, 0.72, 18, dt);
-        pelvisGroup.rotation.x = damp(pelvisGroup.rotation.x, 0.18, 18, dt);
-        torsoGroup.rotation.set(
-          damp(torsoGroup.rotation.x, 0.44, 18, dt),
-          damp(torsoGroup.rotation.y, -0.22, 18, dt),
-          damp(torsoGroup.rotation.z, 0.28, 18, dt)
+        // Animación v2 ('vault'): pierna derecha flexionada sobre el obstáculo, pierna izquierda impulsando,
+        // torso inclinado lateralmente y mano izquierda apoyada al frente mediante IK de 2 huesos.
+        pelvisGroup.position.y = damp(pelvisGroup.position.y, 0.92, 18, dt);
+        pelvisGroup.rotation.set(
+          damp(pelvisGroup.rotation.x, 0.15, 18, dt),
+          0,
+          damp(pelvisGroup.rotation.z || 0, -0.15, 18, dt)
         );
-        leftLeg.hip.rotation.set(damp(leftLeg.hip.rotation.x, -1.05, 18, dt), 0, damp(leftLeg.hip.rotation.z || 0, 0.48, 18, dt));
-        leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, 1.25, 18, dt);
-        rightLeg.hip.rotation.set(damp(rightLeg.hip.rotation.x, -0.92, 18, dt), 0, damp(rightLeg.hip.rotation.z || 0, 0.42, 18, dt));
-        rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, 1.18, 18, dt);
+        torsoGroup.rotation.set(
+          damp(torsoGroup.rotation.x, 0.22, 18, dt),
+          damp(torsoGroup.rotation.y, 0.12, 18, dt),
+          damp(torsoGroup.rotation.z, -0.20, 18, dt)
+        );
+        if (ruanaFrontPivot) ruanaFrontPivot.rotation.x = damp(ruanaFrontPivot.rotation.x, 0.50, 18, dt);
+        if (ruanaBackPivot) ruanaBackPivot.rotation.x = damp(ruanaBackPivot.rotation.x, -0.30, 18, dt);
+        if (neckGroup) neckGroup.rotation.set(0, 0.18, 0.05);
 
-        leftArm.shoulder.rotation.set(damp(leftArm.shoulder.rotation.x, -0.58, 20, dt), -0.18, 0.34);
-        leftArm.elbow.rotation.x = damp(leftArm.elbow.rotation.x, -0.12, 20, dt);
+        rightLeg.hip.rotation.set(damp(rightLeg.hip.rotation.x, -1.45, 18, dt), 0, damp(rightLeg.hip.rotation.z || 0, -0.42, 18, dt));
+        rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, 1.85, 18, dt);
+        if (rightLeg.ankle) rightLeg.ankle.rotation.x = damp(rightLeg.ankle.rotation.x, 0.20, 18, dt);
+
+        leftLeg.hip.rotation.set(damp(leftLeg.hip.rotation.x, 0.50, 18, dt), 0, damp(leftLeg.hip.rotation.z || 0, 0.12, 18, dt));
+        leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, 0.45, 18, dt);
+        if (leftLeg.ankle) leftLeg.ankle.rotation.x = damp(leftLeg.ankle.rotation.x, 0.55, 18, dt);
+
+        _ikTargetTorso.set(0.22, -0.02, 0.36);
+        _ikPoleL.set(0.7, -1.0, -0.2);
+        solveArmIK(leftArm.shoulder, leftArm.elbow, _ikTargetTorso, _ikPoleL, 0.28, 0.31);
+
         rightArm.shoulder.rotation.set(damp(rightArm.shoulder.rotation.x, -1.15, 18, dt), 0.15, -0.22);
-        rightArm.elbow.rotation.x = damp(rightArm.elbow.rotation.x, -0.45, 18, dt);
-        headPivot.rotation.x = damp(headPivot.rotation.x, -0.18, 16, dt);
+        rightArm.elbow.rotation.set(damp(rightArm.elbow.rotation.x, -0.45, 18, dt), 0, 0);
+        headPivot.rotation.set(damp(headPivot.rotation.x, -0.14, 16, dt), 0.08, 0.12);
         st.wasAirborne = true;
         return;
       }
 
-      leftLeg.hip.rotation.z = damp(leftLeg.hip.rotation.z || 0, 0, speed, dt);
-      rightLeg.hip.rotation.z = damp(rightLeg.hip.rotation.z || 0, 0, speed, dt);
+      leftLeg.hip.rotation.z = damp(leftLeg.hip.rotation.z || 0, 0.04, speed, dt);
+      rightLeg.hip.rotation.z = damp(rightLeg.hip.rotation.z || 0, -0.04, speed, dt);
 
       if (isSliding || moveMode === 'slide') {
-        pelvisGroup.position.y = damp(pelvisGroup.position.y, 0.36, 16, dt);
+        // Animación v2 ('slide'): cadera baja, torso reclinado, pierna izquierda extendida y derecha recogida (kneeR = 2.05)
+        pelvisGroup.position.y = damp(pelvisGroup.position.y, 0.44, 16, dt);
+        pelvisGroup.rotation.set(damp(pelvisGroup.rotation.x, -0.48, 16, dt), 0, 0);
         torsoGroup.rotation.set(
-          damp(torsoGroup.rotation.x, -0.46, 15, dt),
-          damp(torsoGroup.rotation.y, 0.14, 15, dt),
-          damp(torsoGroup.rotation.z, 0.22, 15, dt)
+          damp(torsoGroup.rotation.x, 0.38 - pitch * 0.45, 15, dt),
+          damp(torsoGroup.rotation.y, -0.18, 15, dt),
+          damp(torsoGroup.rotation.z, 0.12, 15, dt)
         );
-        rightLeg.hip.rotation.x = damp(rightLeg.hip.rotation.x, -1.28, 16, dt);
-        rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, 0.14, 16, dt);
-        leftLeg.hip.rotation.x = damp(leftLeg.hip.rotation.x, -0.36, 16, dt);
-        leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, 1.62, 16, dt);
+        if (ruanaFrontPivot) ruanaFrontPivot.rotation.x = damp(ruanaFrontPivot.rotation.x, 0.58, 15, dt);
+        if (ruanaBackPivot) ruanaBackPivot.rotation.x = damp(ruanaBackPivot.rotation.x, -0.16, 15, dt);
+
+        leftLeg.hip.rotation.set(damp(leftLeg.hip.rotation.x, -1.02, 16, dt), 0, 0.08);
+        leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, 0.12, 16, dt);
+        if (leftLeg.ankle) leftLeg.ankle.rotation.x = damp(leftLeg.ankle.rotation.x, -0.15, 16, dt);
+
+        rightLeg.hip.rotation.set(damp(rightLeg.hip.rotation.x, -0.18, 16, dt), 0, -0.38);
+        rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, 2.02, 16, dt);
+        if (rightLeg.ankle) rightLeg.ankle.rotation.x = damp(rightLeg.ankle.rotation.x, 0.35, 16, dt);
       } else {
+        // Ciclo completo de locomoción Animación v2 (cadera -> rodilla -> despegue de puntera en tobillo + ruanaF/B + mochila)
         const isJump = moveMode === 'jump';
         const isFall = moveMode === 'fall';
         const isAir = isJump || isFall;
         const isSprint = moveMode === 'sprint';
         const isWalk = moveMode === 'walk' || isSprint || moveMode === 'crouch_walk';
+        const runFactor = isSprint ? 1.0 : 0.0;
 
         if (st.wasAirborne && !isAir) {
           st.landingCompression = 0.18;
@@ -1056,116 +790,195 @@ export function createVoxelAvatar(name, colorIdx = 0, isLocal = false) {
         st.wasAirborne = isAir;
         st.landingCompression = damp(st.landingCompression, 0, 10, dt);
 
-        const breath = Math.sin(st.breathClock) * 0.02;
-        const strideAmp = isSprint ? 0.86 : activeHeal ? 0.32 : isCrouching ? 0.42 : isWalk ? 0.56 : 0;
-        const hipSwing = Math.sin(walkPhase) * strideAmp;
-        const vertBob = isWalk && !isAir ? Math.abs(Math.cos(walkPhase)) * (isSprint ? 0.065 : 0.035) : 0;
-        const basePelvisY = isCrouching ? 0.58 : activeHeal ? 0.74 : 0.90;
+        const breath = Math.sin(st.breathClock * 0.75);
+        const sPhi = Math.sin(walkPhase);
+        const cPhi = Math.cos(walkPhase);
+        const strideAmp = isSprint ? 0.78 : activeHeal ? 0.28 : isCrouching ? 0.40 : isWalk ? 0.44 : 0;
+        const thL = -strideAmp * sPhi;
+        const thR = strideAmp * sPhi;
+        const vertBob =
+          isWalk && !isAir
+            ? -(0.02 + 0.03 * runFactor) - (0.035 + 0.03 * runFactor) * sPhi * sPhi
+            : -0.008 * (1 + Math.sin(st.breathClock * 0.8));
+        const basePelvisY = isCrouching ? 0.64 : activeHeal ? 0.92 : 0.985;
 
         pelvisGroup.position.y = damp(
           pelvisGroup.position.y,
           basePelvisY + vertBob - st.landingCompression,
-          15,
+          16,
           dt
         );
+        if (isWalk && !isAir) {
+          pelvisGroup.rotation.set(
+            damp(pelvisGroup.rotation.x, 0.04 + 0.08 * runFactor, 14, dt),
+            damp(pelvisGroup.rotation.y || 0, 0.07 * sPhi, 14, dt),
+            damp(pelvisGroup.rotation.z || 0, 0.025 * cPhi, 14, dt)
+          );
+        }
+
+        if (chestGroup) {
+          chestGroup.scale.y = 1 + breath * 0.015;
+        }
+        if (ruanaFrontPivot && ruanaBackPivot) {
+          const targetRuanaF = isAir
+            ? 0.35
+            : isWalk
+            ? 0.05 + Math.max(0, Math.max(-thL, -thR) - 0.15) * 0.6
+            : 0.04;
+          const targetRuanaB = isAir
+            ? -0.25
+            : isWalk
+            ? -0.05 - 0.28 * runFactor + 0.05 * Math.sin(st.breathClock * 3.8) * runFactor
+            : -0.03;
+          ruanaFrontPivot.rotation.x = damp(ruanaFrontPivot.rotation.x, targetRuanaF, 14, dt);
+          ruanaBackPivot.rotation.x = damp(ruanaBackPivot.rotation.x, targetRuanaB, 14, dt);
+        }
+        if (ruanaGroup) {
+          const targetRuanaZ = isWalk && !isAir ? thL * 0.07 : breath * 0.012;
+          ruanaGroup.rotation.set(0, 0, damp(ruanaGroup.rotation.z, targetRuanaZ, 12, dt));
+        }
+        if (backpackGroup) {
+          const targetPack = isWalk && !isAir ? 0.05 * Math.sin(walkPhase * 2) * (0.5 + runFactor) : 0.012 * breath;
+          backpackGroup.rotation.x = damp(backpackGroup.rotation.x, targetPack, 14, dt);
+        }
 
         const targetTorsoPitch = activeHeal
-          ? 0.38
+          ? 0.16
           : isCrouching
           ? 0.32
           : isSprint
-          ? 0.22
+          ? 0.26
           : isAir
-          ? -0.06
-          : st.landingCompression * 0.5 + breath;
-        const targetTorsoYaw = isWalk && !isAir ? Math.sin(walkPhase) * 0.08 : 0;
+          ? 0.14
+          : 0.06 - pitch * 0.35 + st.landingCompression * 0.5 + breath * 0.015;
+        const targetTorsoYaw = isWalk && !isAir ? -0.06 * sPhi : 0;
         torsoGroup.rotation.set(
-          damp(torsoGroup.rotation.x, targetTorsoPitch, speed, dt),
+          damp(torsoGroup.rotation.x, targetTorsoPitch - st.recoilAmount * 0.05, speed, dt),
           damp(torsoGroup.rotation.y, targetTorsoYaw, speed, dt),
           damp(torsoGroup.rotation.z, 0, speed, dt)
         );
+        if (neckGroup) {
+          neckGroup.rotation.set(
+            damp(neckGroup.rotation.x, isSprint ? -0.12 : activeHeal ? 0.22 : 0, 14, dt),
+            0,
+            0
+          );
+        }
 
         if (isAir) {
-          leftLeg.hip.rotation.x = damp(leftLeg.hip.rotation.x, isJump ? -0.68 : -0.35, speed, dt);
-          leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, isJump ? 0.95 : 0.65, speed, dt);
-          rightLeg.hip.rotation.x = damp(rightLeg.hip.rotation.x, isJump ? 0.26 : 0.15, speed, dt);
-          rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, 0.42, speed, dt);
+          const rising = isJump ? 1.0 : 0.25;
+          leftLeg.hip.rotation.x = damp(leftLeg.hip.rotation.x, -0.55 - 0.35 * rising, speed, dt);
+          leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, 0.78 + 0.52 * rising, speed, dt);
+          rightLeg.hip.rotation.x = damp(rightLeg.hip.rotation.x, -0.25 - 0.30 * rising, speed, dt);
+          rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, 0.58 + 0.40 * rising, speed, dt);
+          if (leftLeg.ankle) leftLeg.ankle.rotation.x = damp(leftLeg.ankle.rotation.x, 0.34, speed, dt);
+          if (rightLeg.ankle) rightLeg.ankle.rotation.x = damp(rightLeg.ankle.rotation.x, 0.28, speed, dt);
         } else if (isCrouching) {
-          leftLeg.hip.rotation.x = damp(leftLeg.hip.rotation.x, -0.78 - hipSwing * 0.5, 16, dt);
+          leftLeg.hip.rotation.x = damp(leftLeg.hip.rotation.x, -0.78 + thL * 0.5, 16, dt);
           leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, 1.38, 16, dt);
-          rightLeg.hip.rotation.x = damp(rightLeg.hip.rotation.x, -0.78 + hipSwing * 0.5, 16, dt);
+          rightLeg.hip.rotation.x = damp(rightLeg.hip.rotation.x, -0.78 + thR * 0.5, 16, dt);
           rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, 1.38, 16, dt);
-        } else {
-          const landingKnee = st.landingCompression * 1.6;
-          const kneeWalkL = Math.max(0, hipSwing) * (isSprint ? 1.05 : 0.72) + landingKnee;
-          const kneeWalkR = Math.max(0, -hipSwing) * (isSprint ? 1.05 : 0.72) + landingKnee;
+          if (leftLeg.ankle) leftLeg.ankle.rotation.x = damp(leftLeg.ankle.rotation.x, -0.25, 16, dt);
+          if (rightLeg.ankle) rightLeg.ankle.rotation.x = damp(rightLeg.ankle.rotation.x, -0.25, 16, dt);
+        } else if (isWalk) {
+          const kAmp = 0.85 + 0.70 * runFactor;
+          const landingKnee = st.landingCompression * 1.5;
+          const kneeL = 0.10 + kAmp * Math.pow(Math.max(0, cPhi), 1.5) + 0.12 * Math.max(0, sPhi) * runFactor + landingKnee;
+          const kneeR = 0.10 + kAmp * Math.pow(Math.max(0, -cPhi), 1.5) + 0.12 * Math.max(0, -sPhi) * runFactor + landingKnee;
+          const pushL = strideAmp > 0 ? Math.max(0, thL / strideAmp) : 0;
+          const pushR = strideAmp > 0 ? Math.max(0, thR / strideAmp) : 0;
+          const ankleL = -(thL + kneeL) * 0.65 + 0.32 * pushL * (0.6 + runFactor);
+          const ankleR = -(thR + kneeR) * 0.65 + 0.32 * pushR * (0.6 + runFactor);
 
-          leftLeg.hip.rotation.x = damp(leftLeg.hip.rotation.x, -hipSwing - landingKnee * 0.55, 16, dt);
-          leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, kneeWalkL, 16, dt);
-          rightLeg.hip.rotation.x = damp(rightLeg.hip.rotation.x, hipSwing - landingKnee * 0.55, 16, dt);
-          rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, kneeWalkR, 16, dt);
+          leftLeg.hip.rotation.x = damp(leftLeg.hip.rotation.x, thL - landingKnee * 0.5, 16, dt);
+          leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, kneeL, 16, dt);
+          rightLeg.hip.rotation.x = damp(rightLeg.hip.rotation.x, thR - landingKnee * 0.5, 16, dt);
+          rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, kneeR, 16, dt);
+          if (leftLeg.ankle) leftLeg.ankle.rotation.x = damp(leftLeg.ankle.rotation.x, ankleL, 16, dt);
+          if (rightLeg.ankle) rightLeg.ankle.rotation.x = damp(rightLeg.ankle.rotation.x, ankleR, 16, dt);
+        } else {
+          // Postura táctica escalonada en reposo/apuntado (Animación v2 'idle' / 'aim')
+          const sw = Math.sin(st.breathClock * 0.35);
+          const landingKnee = st.landingCompression * 1.5;
+          const kL = 0.11 + 0.03 * sw + landingKnee;
+          const kR = 0.11 - 0.03 * sw + landingKnee;
+          leftLeg.hip.rotation.x = damp(leftLeg.hip.rotation.x, -0.10 - landingKnee * 0.5, 12, dt);
+          rightLeg.hip.rotation.x = damp(rightLeg.hip.rotation.x, 0.08 - landingKnee * 0.5, 12, dt);
+          leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, kL, 12, dt);
+          rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, kR, 12, dt);
+          if (leftLeg.ankle) leftLeg.ankle.rotation.x = damp(leftLeg.ankle.rotation.x, -kL * 0.85, 12, dt);
+          if (rightLeg.ankle) rightLeg.ankle.rotation.x = damp(rightLeg.ankle.rotation.x, -kR * 0.85, 12, dt);
         }
       }
 
       const recoilKick = st.recoilAmount * 0.28;
-      const isTwoHandLongGun = equipped === 'rifle' || equipped === 'shotgun' || equipped === 'smg' || equipped === 'sniper';
+      const isTwoHandLongGun =
+        equipped === 'assault_rifle' ||
+        equipped === 'rifle' ||
+        equipped === 'shotgun' ||
+        equipped === 'smg' ||
+        equipped === 'sniper';
       const isSprintingCarry = moveMode === 'sprint' && !isSliding && st.recoilAmount < 0.05;
 
       if (activeHeal) {
-        // Animación 3D de curación (2.0s): ambas manos al frente sosteniendo y aplicando el botiquín
-        const wrapMotion = Math.sin(st.breathClock * 6.5) * 0.09;
-        healProp.position.y = 0.15 + Math.abs(wrapMotion) * 0.18;
-        healProp.rotation.z = wrapMotion * 0.8;
-        rightArm.shoulder.rotation.set(
-          damp(rightArm.shoulder.rotation.x, -1.06 + wrapMotion, 16, dt),
-          damp(rightArm.shoulder.rotation.y, 0.44, 16, dt),
-          -0.14
-        );
-        rightArm.elbow.rotation.x = damp(rightArm.elbow.rotation.x, -0.96 - wrapMotion, 16, dt);
-        leftArm.shoulder.rotation.set(
-          damp(leftArm.shoulder.rotation.x, -1.06 - wrapMotion, 16, dt),
-          damp(leftArm.shoulder.rotation.y, -0.44, 16, dt),
-          0.14
-        );
-        leftArm.elbow.rotation.x = damp(leftArm.elbow.rotation.x, -0.96 + wrapMotion, 16, dt);
-        headPivot.rotation.x = damp(headPivot.rotation.x, 0.32, 14, dt);
+        // Animación v2 ('heal'): botiquín sostenido entre ambas manos mediante IK analítico de 2 huesos
+        const wrapMotion = Math.sin(st.breathClock * 6.5) * 0.035;
+        healProp.position.set(0, 0.20 + Math.abs(wrapMotion) * 0.6, 0.34);
+        healProp.rotation.z = wrapMotion * 2.2;
+
+        _ikTargetTorso.set(0.10, 0.22 + wrapMotion, 0.33);
+        _ikPoleL.set(0.8, -1.0, -0.2);
+        solveArmIK(leftArm.shoulder, leftArm.elbow, _ikTargetTorso, _ikPoleL, 0.28, 0.31);
+
+        _ikTargetTorso.set(-0.10, 0.22 - wrapMotion, 0.33);
+        _ikPoleR.set(-0.8, -1.0, -0.2);
+        solveArmIK(rightArm.shoulder, rightArm.elbow, _ikTargetTorso, _ikPoleR, 0.28, 0.31);
+
+        headPivot.rotation.set(damp(headPivot.rotation.x, 0.26, 14, dt), 0, 0);
         return;
       }
 
       if (isTwoHandLongGun) {
         if (isSprintingCarry) {
-          rightArm.shoulder.rotation.set(damp(rightArm.shoulder.rotation.x, -0.95, speed, dt), 0.35, 0);
-          rightArm.elbow.rotation.x = damp(rightArm.elbow.rotation.x, -0.65, speed, dt);
-          leftArm.shoulder.rotation.set(damp(leftArm.shoulder.rotation.x, -1.05, speed, dt), -0.45, 0);
-          leftArm.elbow.rotation.x = damp(leftArm.elbow.rotation.x, -0.55, speed, dt);
+          // Porte cruzado táctico ('high port' de Animación v2) + mano izquierda en el guardamanos con IK
+          rightArm.shoulder.rotation.set(damp(rightArm.shoulder.rotation.x, -0.98, speed, dt), 0.38, -0.06);
+          rightArm.elbow.rotation.set(damp(rightArm.elbow.rotation.x, -0.68, speed, dt), 0, 0);
         } else {
           rightArm.shoulder.rotation.set(
-            damp(rightArm.shoulder.rotation.x, -1.32 - pitch * 0.75 + recoilKick, 18, dt),
+            damp(rightArm.shoulder.rotation.x, -1.34 - pitch * 0.72 + recoilKick, 18, dt),
             damp(rightArm.shoulder.rotation.y, -0.08, speed, dt),
             0
           );
-          rightArm.elbow.rotation.x = damp(rightArm.elbow.rotation.x, -0.25 - recoilKick * 0.6, 18, dt);
-
-          leftArm.shoulder.rotation.set(
-            damp(leftArm.shoulder.rotation.x, -1.25 - pitch * 0.65 + recoilKick * 0.5, 18, dt),
-            damp(leftArm.shoulder.rotation.y, -0.54, speed, dt),
-            0
-          );
-          leftArm.elbow.rotation.x = damp(leftArm.elbow.rotation.x, -0.35, 18, dt);
+          rightArm.elbow.rotation.set(damp(rightArm.elbow.rotation.x, -0.26 - recoilKick * 0.6, 18, dt), 0, 0);
         }
-      } else if (equipped === 'pistol') {
+        // IK analítico de 2 huesos (solveArmIK): mano izquierda sujeta exactamente el guardamanos de cada arma de Armas v1
+        torsoGroup.updateMatrixWorld(true);
+        if (activeW?.userData?.forendGripPos) {
+          _ikTargetWorld.copy(activeW.userData.forendGripPos);
+          activeW.localToWorld(_ikTargetWorld);
+        } else {
+          _ikTargetWorld.set(0.0, 0.02, 0.24);
+          weaponMount.localToWorld(_ikTargetWorld);
+        }
+        _ikTargetTorso.copy(_ikTargetWorld);
+        torsoGroup.worldToLocal(_ikTargetTorso);
+        _ikPoleL.set(0.55, -1.0, 0.10);
+        solveArmIK(leftArm.shoulder, leftArm.elbow, _ikTargetTorso, _ikPoleL, 0.28, 0.31);
+      } else if (equipped === 'pistol' || equipped === 'revolver') {
+        const handgunKick = equipped === 'revolver' ? recoilKick * 1.55 : recoilKick * 1.2;
         rightArm.shoulder.rotation.set(
-          damp(rightArm.shoulder.rotation.x, -1.42 - pitch * 0.8 + recoilKick * 1.2, 18, dt),
+          damp(rightArm.shoulder.rotation.x, -1.42 - pitch * 0.8 + handgunKick, 18, dt),
           damp(rightArm.shoulder.rotation.y, -0.05, speed, dt),
           0
         );
-        rightArm.elbow.rotation.x = damp(rightArm.elbow.rotation.x, -0.15 - recoilKick * 0.5, 18, dt);
-        leftArm.shoulder.rotation.set(
-          damp(leftArm.shoulder.rotation.x, -1.36 - pitch * 0.75, 16, dt),
-          damp(leftArm.shoulder.rotation.y, -0.46, 16, dt),
-          0
-        );
-        leftArm.elbow.rotation.x = damp(leftArm.elbow.rotation.x, -0.22, 16, dt);
+        rightArm.elbow.rotation.set(damp(rightArm.elbow.rotation.x, -0.15 - recoilKick * 0.5, 18, dt), 0, 0);
+        torsoGroup.updateMatrixWorld(true);
+        _ikTargetWorld.set(0.03, -0.02, 0.04);
+        weaponMount.localToWorld(_ikTargetWorld);
+        _ikTargetTorso.copy(_ikTargetWorld);
+        torsoGroup.worldToLocal(_ikTargetTorso);
+        _ikPoleL.set(0.65, -1.0, 0.05);
+        solveArmIK(leftArm.shoulder, leftArm.elbow, _ikTargetTorso, _ikPoleL, 0.28, 0.31);
       } else {
         const armSwing =
           moveMode === 'walk' || moveMode === 'sprint'
@@ -1177,12 +990,12 @@ export function createVoxelAvatar(name, colorIdx = 0, isLocal = false) {
           0.1,
           -0.12
         );
-        rightArm.elbow.rotation.x = damp(rightArm.elbow.rotation.x, -0.55 + slash * 0.4, 16, dt);
+        rightArm.elbow.rotation.set(damp(rightArm.elbow.rotation.x, -0.55 + slash * 0.4, 16, dt), 0, 0);
         leftArm.shoulder.rotation.set(damp(leftArm.shoulder.rotation.x, -armSwing, 16, dt), 0, 0.06);
-        leftArm.elbow.rotation.x = damp(leftArm.elbow.rotation.x, moveMode === 'sprint' ? -0.85 : -0.32, 16, dt);
+        leftArm.elbow.rotation.set(damp(leftArm.elbow.rotation.x, moveMode === 'sprint' ? -0.85 : -0.32, 16, dt), 0, 0);
       }
 
-      headPivot.rotation.x = damp(headPivot.rotation.x, -pitch * 0.62, 16, dt);
+      headPivot.rotation.set(damp(headPivot.rotation.x, -pitch * 0.58 - st.recoilAmount * 0.03, 16, dt), 0, 0);
     }
   };
 }
@@ -1209,8 +1022,10 @@ class FirstPersonWeaponRig {
     this.models = {
       fists: this.buildArmedRig('fists'),
       pistol: this.buildArmedRig('pistol'),
+      revolver: this.buildArmedRig('revolver'),
       shotgun: this.buildArmedRig('shotgun'),
       smg: this.buildArmedRig('smg'),
+      assault_rifle: this.buildArmedRig('assault_rifle'),
       rifle: this.buildArmedRig('rifle'),
       sniper: this.buildArmedRig('sniper')
     };
@@ -1258,15 +1073,16 @@ class FirstPersonWeaponRig {
       rightArm.position.set(0.02, -0.05, 0.02);
       rightArm.rotation.set(0.28, -0.14, 0.08);
       leftArm.visible = false;
-    } else if (weaponId === 'pistol') {
+    } else if (weaponId === 'pistol' || weaponId === 'revolver') {
       rightArm.position.set(0.015, -0.09, 0.04);
       rightArm.rotation.set(0.22, -0.06, 0);
       leftArm.position.set(-0.04, -0.095, 0.03);
       leftArm.rotation.set(0.24, 0.28, -0.08);
     } else {
-      rightArm.position.set(0.015, -0.09, 0.08);
+      const fg = weapon.userData.forendGripPos;
+      rightArm.position.set(0.015, -0.085, 0.06);
       rightArm.rotation.set(0.2, -0.05, 0);
-      leftArm.position.set(-0.045, -0.045, -0.26);
+      leftArm.position.set(-0.042, fg ? fg.y * 1.15 - 0.026 : -0.045, fg ? -fg.z * 1.15 : -0.26);
       leftArm.rotation.set(0.14, 0.36, -0.15);
     }
 
@@ -1308,7 +1124,16 @@ class FirstPersonWeaponRig {
       this.meleeProgress = 0.001;
       return;
     }
-    const recoilScale = weaponId === 'shotgun' || weaponId === 'sniper' ? 0.085 : weaponId === 'smg' ? 0.032 : 0.05;
+    const recoilScale =
+      weaponId === 'shotgun' || weaponId === 'sniper'
+        ? 0.085
+        : weaponId === 'revolver'
+        ? 0.068
+        : weaponId === 'smg'
+        ? 0.032
+        : weaponId === 'assault_rifle'
+        ? 0.042
+        : 0.05;
     this.recoilZ = Math.min(0.12, this.recoilZ + recoilScale);
     this.recoilPitch = Math.min(0.22, this.recoilPitch + recoilScale * 1.1);
     this.flashTimer = 0.05;
@@ -1348,9 +1173,12 @@ class FirstPersonWeaponRig {
     if (this.currentWeapon === 'fists') {
       _fpHipPos.set(0.28, -0.22, -0.42);
       _fpAdsPos.copy(_fpHipPos);
-    } else if (this.currentWeapon === 'pistol') {
+    } else if (this.currentWeapon === 'pistol' || this.currentWeapon === 'revolver') {
       _fpHipPos.set(0.21, -0.18, -0.38);
-      _fpAdsPos.set(0.075, -0.148, -0.32);
+      _fpAdsPos.set(0.075, -0.152, -0.32);
+    } else if (this.currentWeapon === 'assault_rifle') {
+      _fpHipPos.set(0.23, -0.205, -0.43);
+      _fpAdsPos.set(0.085, -0.178, -0.34);
     }
 
     _fpPos.copy(_fpHipPos).lerp(_fpAdsPos, this.adsBlend);
@@ -1383,10 +1211,20 @@ class FirstPersonWeaponRig {
         const rSin = Math.sin(Math.min(1, info.reloadProgress) * Math.PI);
         rotZ += rSin * 0.45;
         rotX += rSin * 0.2;
-        if (mag) mag.position.y = -rSin * 0.14;
+        if (mag) {
+          if (wMesh.userData.isRevolver) {
+            mag.position.x = rSin * 0.036;
+            mag.position.y = -rSin * 0.012;
+          } else {
+            mag.position.y = -rSin * 0.14;
+          }
+        }
       } else {
-        if (mag) mag.position.y = 0;
-        if (slide) slide.position.z = -this.recoilZ * 1.1;
+        if (mag) {
+          mag.position.x = 0;
+          mag.position.y = 0;
+        }
+        if (slide && !wMesh.userData.isRevolver) slide.position.z = -this.recoilZ * 1.1;
       }
 
       if (this.flashTimer > 0) {
@@ -1432,6 +1270,9 @@ export class LocalPlayerController {
     this.planeViewMode = 'cabin_third';
     this.avatar = null;
     this.seatIndex = 0;
+    this.isCabinDisembarking = false;
+    this.cabinDisembarkTimer = 0;
+    this.cabinDisembarkDuration = CABIN_DISEMBARK_MS / 1000;
 
     this.fpCanopy = createParachuteCanopy();
     this.scene.add(this.fpCanopy);
@@ -1494,8 +1335,10 @@ export class LocalPlayerController {
     this.weapons = {
       fists: { unlocked: true, mag: 0 },
       pistol: { unlocked: false, mag: 0 },
+      revolver: { unlocked: false, mag: 0 },
       shotgun: { unlocked: false, mag: 0 },
       smg: { unlocked: false, mag: 0 },
+      assault_rifle: { unlocked: false, mag: 0 },
       rifle: { unlocked: false, mag: 0 },
       sniper: { unlocked: false, mag: 0 }
     };
@@ -1541,10 +1384,18 @@ export class LocalPlayerController {
     this.fpRig.setAspect(aspect);
   }
 
+  ensureAvatarInWorldScene() {
+    if (this.avatar && this.avatar.root.parent !== this.scene) {
+      this.scene.add(this.avatar.root);
+    }
+  }
+
   spawnAvatar(name, colorIdx = 0, seatIndex = 0) {
     this.seatIndex = seatIndex;
+    this.isCabinDisembarking = false;
+    this.cabinDisembarkTimer = 0;
     if (this.avatar) {
-      this.scene.remove(this.avatar.root);
+      this.avatar.root.removeFromParent();
       this.avatar.dispose?.();
     }
     this.avatar = createVoxelAvatar(name, colorIdx, true);
@@ -1653,23 +1504,56 @@ export class LocalPlayerController {
     this.onSlideChange?.(false);
   }
 
-  initiateLocalJumpFromPlane(planeState, worldInstance) {
+  startCabinDisembarkSequence() {
+    if (this.state !== 'plane' || this.isCabinDisembarking) return;
+    this.isCabinDisembarking = true;
+    this.cabinDisembarkTimer = 0;
+    this.onJumpRequest?.();
+  }
+
+  completeLocalRampJump(planeState, worldInstance) {
+    this.ensureAvatarInWorldScene();
     if (worldInstance && worldInstance.planeMesh) {
-      const rampExit = worldInstance.getPlaneSmoothAnchor(0, -1.4, -7.8);
-      this.x = rampExit.x;
-      this.y = rampExit.y;
-      this.z = rampExit.z;
-      this.smoothCamPos.set(rampExit.x, rampExit.y + 3, rampExit.z);
+      const exitLocal = worldInstance.sampleCabinDisembarkLocalPose(this.seatIndex, 1.0);
+      const bay = worldInstance.getActiveCabinBayGroup();
+      _planeAnchor.set(exitLocal.x, exitLocal.y, exitLocal.z);
+      bay.updateMatrixWorld(true);
+      bay.localToWorld(_planeAnchor);
+      this.x = _planeAnchor.x;
+      this.y = _planeAnchor.y;
+      this.z = _planeAnchor.z;
+      this.smoothCamPos.set(_planeAnchor.x, _planeAnchor.y + 2.6, _planeAnchor.z);
     }
     if (planeState) {
-      this.airMomentumX = (planeState.vx || 0) * 0.35;
-      this.airMomentumZ = (planeState.vz || 0) * 0.35;
+      // Ligera inercia hacia adelante al saltar, quedando visiblemente atrás mientras el avión sigue a 38 m/s
+      this.airMomentumX = (planeState.vx || 0) * 0.42;
+      this.airMomentumZ = (planeState.vz || 0) * 0.42;
     }
     const groundY = this.currentMap ? this.currentMap.getFloorBelowY(this.x, this.y, this.z) : 8;
     this.jumpStartAltitude = Math.max(15, this.y - groundY);
     this.currentDescentSpeed = PARACHUTE_CONFIG.freefallInitialSpeed;
+    this.isCabinDisembarking = false;
+    this.cabinDisembarkTimer = 0;
     this.state = 'skydiving';
+    this.moveMode = 'fall';
     this.onGround = false;
+    this.cameraInitializedOnFoot = true;
+  }
+
+  forceSyncExitFromServer(meSnapshot) {
+    this.ensureAvatarInWorldScene();
+    this.isCabinDisembarking = false;
+    this.cabinDisembarkTimer = 0;
+    this.state = meSnapshot.state;
+    this.x = meSnapshot.x;
+    this.y = meSnapshot.y;
+    this.z = meSnapshot.z;
+    if (this.lastPlaneState) {
+      this.airMomentumX = (this.lastPlaneState.vx || 0) * 0.42;
+      this.airMomentumZ = (this.lastPlaneState.vz || 0) * 0.42;
+    }
+    this.jumpStartAltitude = meSnapshot.jumpAltitude || PARACHUTE_CONFIG.planeHeightAboveValley;
+    this.currentDescentSpeed = PARACHUTE_CONFIG.freefallInitialSpeed;
     this.cameraInitializedOnFoot = true;
   }
 
@@ -1697,8 +1581,7 @@ export class LocalPlayerController {
 
       if (e.code === 'Space' || e.code === 'KeyF') {
         if (this.state === 'plane') {
-          this.initiateLocalJumpFromPlane(this.lastPlaneState, this.lastWorldInstance);
-          this.onJumpRequest?.();
+          this.startCabinDisembarkSequence();
         } else if (this.state === 'skydiving') {
           if (this.currentGroundClearance >= PARACHUTE_CONFIG.minClearanceToOpen) {
             this.state = 'parachuting';
@@ -1756,16 +1639,12 @@ export class LocalPlayerController {
 
       if (e.code === 'KeyR') this.tryReload();
       if (e.code === 'Digit1') this.trySwitchWeapon('pistol');
-      if (e.code === 'Digit2') this.trySwitchWeapon('shotgun');
-      if (e.code === 'Digit3') this.trySwitchWeapon('smg');
-      if (e.code === 'Digit4') {
-        if (this.weapons.rifle.unlocked) this.trySwitchWeapon('rifle');
-        else this.tryRequestHeal('medkit');
-      }
-      if (e.code === 'Digit5') {
-        if (this.weapons.sniper.unlocked) this.trySwitchWeapon('sniper');
-        else this.tryRequestHeal('bandage');
-      }
+      if (e.code === 'Digit2') this.trySwitchWeapon('revolver');
+      if (e.code === 'Digit3') this.trySwitchWeapon('shotgun');
+      if (e.code === 'Digit4') this.trySwitchWeapon('smg');
+      if (e.code === 'Digit5') this.trySwitchWeapon('assault_rifle');
+      if (e.code === 'Digit6') this.trySwitchWeapon('rifle');
+      if (e.code === 'Digit7') this.trySwitchWeapon('sniper');
       if (e.code === 'Backquote' || e.code === 'Digit0') this.trySwitchWeapon('fists');
 
       if (e.code === 'KeyE') this.onInteractRequest?.();
@@ -1971,23 +1850,51 @@ export class LocalPlayerController {
       if (wLen > 0) { wishX /= wLen; wishZ /= wLen; }
 
       if (this.state === 'plane' && planeState && worldInstance) {
-        const seat = worldInstance.getCabinSeatTransform(this.seatIndex);
-        this.x = seat.x;
-        this.y = seat.y;
-        this.z = seat.z;
-        const groundBelow = mapData.getFloorBelowY(seat.x, seat.y, seat.z);
-        this.currentGroundClearance = Math.max(0, seat.y - groundBelow);
-        this.jumpStartAltitude = Math.max(15, this.currentGroundClearance);
-        this.moveMode = 'seated';
+        if (this.isCabinDisembarking) {
+          this.cabinDisembarkTimer += dt;
+          if (this.cabinDisembarkTimer >= this.cabinDisembarkDuration) {
+            this.completeLocalRampJump(planeState, worldInstance);
+          }
+        }
 
-        if (this.avatar) {
-          this.avatar.root.visible = this.planeViewMode !== 'cabin_first';
-          this.avatar.root.position.set(seat.x, seat.y, seat.z);
-          this.avatar.root.rotation.set(seat.pitch || 0, seat.yaw, seat.roll || 0);
-          this.avatar.setWeapon(this.equipped);
-          this.avatar.animate(0, 'plane', this.equipped, 0, 'seated', dt, false, false);
+        if (this.state === 'plane') {
+          const normProg = this.isCabinDisembarking
+            ? Math.min(1, this.cabinDisembarkTimer / Math.max(0.1, this.cabinDisembarkDuration))
+            : 0;
+          const bayGroup = worldInstance.getActiveCabinBayGroup();
+          const localPose = worldInstance.sampleCabinDisembarkLocalPose(this.seatIndex, normProg);
+
+          // Anclar el avatar directamente como hijo del THREE.Group local de la bodega (hereda movimiento y balanceo)
+          if (this.avatar) {
+            if (bayGroup && this.avatar.root.parent !== bayGroup) {
+              bayGroup.add(this.avatar.root);
+            }
+            this.avatar.root.visible = this.planeViewMode !== 'cabin_first';
+            this.avatar.root.position.set(localPose.x, localPose.y, localPose.z);
+            this.avatar.root.rotation.set(0, localPose.yaw, 0);
+            this.avatar.setOpacity(1.0, false);
+            this.avatar.setWeapon(this.equipped);
+          }
+
+          bayGroup.updateMatrixWorld(true);
+          _planeAnchor.set(localPose.x, localPose.y, localPose.z);
+          bayGroup.localToWorld(_planeAnchor);
+          this.x = _planeAnchor.x;
+          this.y = _planeAnchor.y;
+          this.z = _planeAnchor.z;
+
+          const groundBelow = mapData.getFloorBelowY(this.x, this.y, this.z);
+          this.currentGroundClearance = Math.max(0, this.y - groundBelow);
+          this.jumpStartAltitude = Math.max(15, this.currentGroundClearance);
+          this.moveMode = localPose.phase === 'sit' ? 'seated' : localPose.phase;
+          this.walkPhase = localPose.walkCycle;
+
+          if (this.avatar) {
+            this.avatar.animate(localPose.walkCycle, 'plane', this.equipped, 0, this.moveMode, dt, false, false);
+          }
         }
       } else if (this.state === 'skydiving' || this.state === 'parachuting') {
+        this.ensureAvatarInWorldScene();
         this.endSlide();
         this.isCrouching = false;
         const floorY = mapData.getFloorBelowY(this.x, this.y, this.z);
@@ -2040,7 +1947,22 @@ export class LocalPlayerController {
         }
 
         const updatedFloorY = mapData.getFloorBelowY(this.x, this.y + 0.7, this.z);
-        if (this.y <= updatedFloorY + 0.12) {
+        const splashWaterDepth = getWaterDepthAt(mapData, this.x, this.z);
+        if (splashWaterDepth > SWIM_CONFIG.swimDepth && this.y <= WATER_LEVEL + 0.20) {
+          // Aterrizaje directo en la laguna o río profundo: cero sacudida de impacto y transición limpia a nado
+          this.y = getSwimFloatY(mapData, this.x, this.z);
+          this.vy = 0;
+          this.currentDescentSpeed = 0;
+          this.airMomentumX = 0;
+          this.airMomentumZ = 0;
+          this.onGround = true;
+          this.isSwimming = true;
+          this.state = 'ground';
+          this.moveMode = 'swim_idle';
+          this.airPeakY = this.y;
+          this.audio.playSplash?.(1.2);
+          this.onSpawnWaterRipples?.(this.x, this.z, true, 1.35);
+        } else if (this.y <= updatedFloorY + 0.12) {
           const impactSpeed = this.currentDescentSpeed;
           this.y = updatedFloorY;
           this.vy = 0;
@@ -2052,8 +1974,10 @@ export class LocalPlayerController {
           this.airPeakY = updatedFloorY;
           this.cameraLandingOffset = -0.14 * Math.min(2.0, impactSpeed / 12);
           this.audio.playFootstep(false);
+          this.moveMode = 'fall';
+        } else {
+          this.moveMode = 'fall';
         }
-        this.moveMode = 'fall';
       } else if (this.state === 'ground') {
         const wasOnGround = this.onGround;
         const preVy = this.vy;
@@ -2061,7 +1985,7 @@ export class LocalPlayerController {
         const prevY = this.y;
         const prevZ = this.z;
 
-        // Agua profunda: nadar a flote con la cabeza y los hombros fuera
+        // Agua profunda (> 1.25m): estado swimming con flotabilidad en superficie, ondas por Object Pooling y salida suave
         const swimmingNow = !this.isVaulting && isSwimmingAt(mapData, this.x, this.y, this.z);
         if (swimmingNow) {
           if (!this.isSwimming) {
@@ -2070,13 +1994,15 @@ export class LocalPlayerController {
             this.isCrouching = false;
             if (this.isHealing) this.cancelClientHeal(true);
             this.audio.playSplash?.(Math.min(1.4, 0.5 + Math.abs(preVy) / 12));
+            this.onSpawnWaterRipples?.(this.x, this.z, true, 1.15);
           }
           const swimSpeed = sprinting ? SWIM_CONFIG.swimSprintSpeed : SWIM_CONFIG.swimSpeed;
           stepCharacterPhysics(mapData, this, wishX * swimSpeed, wishZ * swimSpeed, dt, 0, PLAYER_RADIUS, PLAYER_HEIGHT);
           if (remoteEntities.length > 0) {
             applyEntitySeparation(this, remoteEntities, PLAYER_RADIUS, dt, mapData);
           }
-          this.y = damp(this.y, getSwimFloatY(mapData, this.x, this.z), 5, dt);
+          const targetFloatY = getSwimFloatY(mapData, this.x, this.z);
+          this.y = damp(this.y, targetFloatY, 6, dt);
           this.vy = 0;
           this.onGround = true;
           this.airPeakY = this.y;
@@ -2095,8 +2021,15 @@ export class LocalPlayerController {
           } else {
             this.moveMode = 'swim_idle';
           }
+
+          this.swimRippleAccum = (this.swimRippleAccum || 0) + dt;
+          if (this.swimRippleAccum >= (movingHoriz ? 0.13 : 0.32)) {
+            this.swimRippleAccum = 0;
+            this.onSpawnWaterRipples?.(this.x, this.z, movingHoriz, sprinting ? 1.15 : 0.85);
+          }
         } else if (this.isSwimming) {
           this.isSwimming = false;
+          this.onSpawnWaterRipples?.(this.x, this.z, false, 0.65);
         }
 
         if (swimmingNow) {
@@ -2235,6 +2168,7 @@ export class LocalPlayerController {
 
     const sniperAds = this.isSniperScoped();
     if (this.avatar && this.state !== 'plane') {
+      this.ensureAvatarInWorldScene();
       const camCloseFade =
         this.cameraMode === 'third'
           ? Math.max(0, Math.min(1, (this.smoothCamDist - 0.72) / 1.05))
@@ -2242,8 +2176,11 @@ export class LocalPlayerController {
       const adsAlpha = this.aimingZoom ? Math.min(camCloseFade, 0.85) : camCloseFade;
       const showLocalBody = this.alive && this.cameraMode === 'third' && !sniperAds && adsAlpha > 0.08;
       this.avatar.root.visible = showLocalBody;
-      if (showLocalBody) {
-        this.avatar.setOpacity(adsAlpha, this.aimingZoom && this.smoothCamDist < 1.65);
+      if (this.alive) {
+        // Actualizar siempre posición, rotación, IK y fase de animación aunque esté en 1ra persona o mira telescópica
+        if (showLocalBody) {
+          this.avatar.setOpacity(adsAlpha, this.aimingZoom && this.smoothCamDist < 1.65);
+        }
         this.avatar.root.position.set(this.x, this.y, this.z);
         this.avatar.root.rotation.set(0, this.yaw, 0);
         this.avatar.setWeapon(this.equipped);
@@ -2305,21 +2242,30 @@ export class LocalPlayerController {
     _camRightVec.set(-Math.cos(this.yaw), 0, Math.sin(this.yaw));
 
     if (this.alive && this.state === 'plane' && planeState && worldInstance) {
+      const rig = worldInstance.getActiveAircraftRig?.();
       this.camera.fov = damp(this.camera.fov, this.planeViewMode === 'plane_exterior' ? 74 : 76, 12, dt);
       this.camera.updateProjectionMatrix();
 
       if (this.planeViewMode === 'cabin_first') {
-        this.camera.position.set(this.x, this.y + 1.15, this.z);
+        const eyeLift = this.isCabinDisembarking ? 1.56 : 1.18;
+        this.camera.position.set(this.x, this.y + eyeLift, this.z);
         _camTarget.copy(this.camera.position).addScaledVector(_camLookDir, 30);
         this.camera.lookAt(_camTarget);
       } else if (this.planeViewMode === 'plane_exterior') {
+        const extDist = rig?.cameraExteriorDistance || 24.5;
         worldInstance.getPlaneSmoothAnchor(0, 1.2, 0, _planeAnchor);
-        _camPos.copy(_planeAnchor).addScaledVector(_camLookDir, -20);
-        _camPos.y = Math.max(_planeAnchor.y - 5, _camPos.y);
+        _camPos.copy(_planeAnchor).addScaledVector(_camLookDir, -extDist);
+        _camPos.y = Math.max(_planeAnchor.y - 6, _camPos.y);
         this.camera.position.copy(_camPos);
         this.camera.lookAt(_planeAnchor);
       } else {
-        worldInstance.getPlaneSmoothAnchor(0, 0.35, -1.5, _planeAnchor);
+        const camLocal = rig?.cameraInteriorAnchor;
+        worldInstance.getPlaneSmoothAnchor(
+          camLocal ? camLocal.x : 0,
+          camLocal ? camLocal.y : 0.48,
+          camLocal ? camLocal.z : 1.85,
+          _planeAnchor
+        );
         this.camera.position.copy(_planeAnchor);
         _camTarget.copy(_planeAnchor).addScaledVector(_camLookDir, 30);
         this.camera.lookAt(_camTarget);
@@ -2391,20 +2337,54 @@ export class LocalPlayerController {
 
     _camBackDir.copy(_camLookDir).negate();
     let unobstructedDist = desiredDist;
+    const maxRayCheckDist = desiredDist + CAMERA_COLLISION_OFFSET + 0.05;
+    let closestHitDist = Infinity;
 
-    if (mapData) {
-      const hit = raycastVoxels(mapData, _camPivot, _camBackDir, desiredDist + 0.35);
-      if (hit.hit) {
-        unobstructedDist = Math.max(0.55, hit.dist - 0.28);
+    // 1. Raycaster 3D exacto de Three.js desde el pivote de cabeza/hombro contra muros, techos, puentes y terreno
+    if (worldInstance && worldInstance.collectCameraOccludersNear) {
+      const occluders = worldInstance.collectCameraOccludersNear(
+        _camPivot.x,
+        _camPivot.z,
+        maxRayCheckDist + 16,
+        _camNearbyMeshes
+      );
+      if (occluders.length > 0) {
+        _camRaycaster.set(_camPivot, _camBackDir);
+        _camRaycaster.near = 0.05;
+        _camRaycaster.far = maxRayCheckDist;
+        _camRayHits.length = 0;
+        _camRaycaster.intersectObjects(occluders, false, _camRayHits);
+        if (_camRayHits.length > 0 && _camRayHits[0].distance < closestHitDist) {
+          closestHitDist = _camRayHits[0].distance;
+        }
       }
     }
 
-    const distRate = unobstructedDist < this.smoothCamDist ? 30 : 11;
+    // 2. Respaldo analítico contra volúmenes de colisión y sondas laterales (tipo esfera) para evitar roce en esquinas
+    if (mapData) {
+      const centerHit = raycastVoxels(mapData, _camPivot, _camBackDir, maxRayCheckDist);
+      if (centerHit.hit && centerHit.dist < closestHitDist) {
+        closestHitDist = centerHit.dist;
+      }
+      for (const sideSign of [-1, 1]) {
+        _camWhiskerOrigin.copy(_camPivot).addScaledVector(_camRightVec, sideSign * 0.16);
+        const sideHit = raycastVoxels(mapData, _camWhiskerOrigin, _camBackDir, maxRayCheckDist);
+        if (sideHit.hit && sideHit.dist < closestHitDist) {
+          closestHitDist = sideHit.dist;
+        }
+      }
+    }
+
+    if (closestHitDist < Infinity) {
+      unobstructedDist = Math.max(0.42, closestHitDist - CAMERA_COLLISION_OFFSET);
+    }
+
+    const distRate = unobstructedDist < this.smoothCamDist ? 34 : 11;
     this.smoothCamDist = damp(this.smoothCamDist, unobstructedDist, distRate, dt);
 
     _camPos.copy(_camPivot).addScaledVector(_camBackDir, this.smoothCamDist);
     if (mapData) {
-      const minGroundCamY = mapData.getGroundHeightAt(_camPos.x, _camPos.z, _camPivot.y) + 0.34;
+      const minGroundCamY = mapData.getGroundHeightAt(_camPos.x, _camPos.z, _camPivot.y) + CAMERA_COLLISION_OFFSET;
       if (_camPos.y < minGroundCamY) _camPos.y = minGroundCamY;
     }
 

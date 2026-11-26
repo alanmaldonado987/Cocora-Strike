@@ -132,3 +132,42 @@ test('nadando no se puede disparar ni curar', () => {
   room.handleHeal('h1', 'medkit');
   assert.equal(p.healingUntil || 0, 0);
 });
+
+test('caer desde gran altura en agua profunda nadable (laguna o río) inflige 0 daño por caída', () => {
+  const room = createRoom();
+  const p = room.createFreshParticipant('h_dive', 'Clavadista');
+  room.players.set('h_dive', p);
+  room.phase = 'playing';
+
+  const lagoonZ = 252;
+  const lagoonX = getRiverCenterWorldX(lagoonZ);
+  const lagoonDepth = getWaterDepthAt(room.map, lagoonX, lagoonZ);
+  assert.ok(lagoonDepth > SWIM_CONFIG.swimDepth, `laguna profunda esperada, actual=${lagoonDepth}`);
+
+  Object.assign(p, {
+    alive: true,
+    hp: 100,
+    state: 'skydiving',
+    x: lagoonX,
+    y: WATER_LEVEL + 48,
+    z: lagoonZ,
+    fallPeakY: WATER_LEVEL + 48,
+    onGround: false
+  });
+
+  const floatY = getSwimFloatY(room.map, lagoonX, lagoonZ);
+  room.handlePlayerInput('h_dive', {
+    x: lagoonX,
+    y: floatY,
+    z: lagoonZ,
+    yaw: 0,
+    pitch: 0,
+    onGround: true,
+    isSwimming: true,
+    state: 'swimming',
+    moveMode: 'swim_idle'
+  });
+
+  assert.equal(p.hp, 100, 'el agua profunda debe desactivar el daño por caída');
+  assert.equal(p.isSwimming, true, 'debe quedar flotando en estado swimming');
+});

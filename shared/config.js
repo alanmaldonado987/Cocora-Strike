@@ -6,20 +6,30 @@ export const BLOCK_SIZE = CELL_SIZE;
 export const GRID_SIZE = 320; // 320 x 2m = 640 x 640 metros reales (-320m a +320m)
 export const WORLD_SIZE = GRID_SIZE * CELL_SIZE;
 export const WORLD_HALF = WORLD_SIZE / 2; // 320m
-// Superficie del río Quindío. Las orillas naturales nunca bajan de ~12.8 m, así que el agua queda
-// dentro del cauce; el lecho se excava relativo a este nivel (2.55 m de fondo en el centro).
-export const WATER_LEVEL = 9.0;
+// Superficie elevada del Río Quindío y su Desembocadura Andina, integrada a nivel natural del valle
+// (apenas ~1.0m - 1.6m por debajo de las praderas ribereñas, eliminando el efecto de cañón profundo).
+export const WATER_LEVEL = 12.4;
 export const RIVER_CENTER_DEPTH = 2.55; // profundidad en el centro del cauce
-export const RIVER_EDGE_DEPTH = 1.2; // profundidad junto a la orilla
-export const RIVER_FORD_DEPTH = 0.75; // vados: se cruzan caminando
+export const RIVER_EDGE_DEPTH = 0.85; // transición gradual junto a la orilla húmeda
+export const RIVER_FORD_DEPTH = 0.72; // vados: se cruzan caminando
+
+// Laguna / Desembocadura Andina Nadable en el tramo sur del valle (lejos de casas y puentes)
+export const LAGOON_CONFIG = {
+  mouthStartZ: 194.0, // ensanchamiento progresivo al sur del último puente de piedra (bSouth en z = 186)
+  centerZ: 252.0,     // centro de la cuenca abierta del sur
+  endZ: 296.0,        // ribera sur natural antes del anfiteatro montañoso
+  radiusX: 43.0,      // semieje transversal (~86m de espejo de agua)
+  radiusZ: 39.0,      // semieje longitudinal (~78m)
+  maxDepth: 3.45      // profundidad máxima continua en el corazón de la laguna (> 1.25m)
+};
 
 // Nado y ahogamiento
 export const SWIM_CONFIG = {
-  swimDepth: 1.3, // con más agua que esto se nada; con menos se vadea caminando
-  wadeSpeedMult: 0.65, // velocidad al vadear (agua por la cintura)
-  floatDepth: 1.38, // al nadar, los pies quedan a esta profundidad (cabeza y hombros fuera)
-  swimSpeed: 3.2,
-  swimSprintSpeed: 4.6,
+  swimDepth: 1.25, // umbral exacto de pecho (waterLevel - groundHeight > 1.25m activa swimming)
+  wadeSpeedMult: 0.68, // velocidad al vadear en orillas someras
+  floatDepth: 1.36, // al nadar, los pies quedan a esta profundidad (cabeza y hombros fuera)
+  swimSpeed: 3.4,
+  swimSprintSpeed: 4.8,
   maxBreath: 100,
   drainPerSec: 4.0, // ~25 s nadando normal
   sprintDrainPerSec: 7.0, // ~14 s nadando rápido (Shift)
@@ -58,8 +68,8 @@ export const BLOCK = {
   WATER: 5
 };
 
-// Arsenal táctico completo de 5 armas diferenciadas + machete ligero de respaldo inicial
-export const WEAPON_SLOTS = ['pistol', 'shotgun', 'smg', 'rifle', 'sniper'];
+// Arsenal táctico completo de "Armas v1" (7 armas de fuego 3D diferenciadas + machete ligero de respaldo inicial)
+export const WEAPON_SLOTS = ['pistol', 'revolver', 'shotgun', 'smg', 'assault_rifle', 'rifle', 'sniper'];
 
 export const WEAPONS = {
   fists: {
@@ -82,7 +92,7 @@ export const WEAPONS = {
   pistol: {
     id: 'pistol',
     slot: 1,
-    name: 'Pistola Táctica 9mm',
+    name: 'Pistola Semiautomática 9mm',
     magSize: 15,
     startAmmo: 30,
     fireRateMs: 210,
@@ -97,10 +107,28 @@ export const WEAPONS = {
     moveSpeedMult: 1.02,
     auto: false
   },
+  revolver: {
+    id: 'revolver',
+    slot: 2,
+    name: 'Revólver Clásico .357',
+    magSize: 6,
+    startAmmo: 18,
+    fireRateMs: 430,
+    damage: 44,
+    headshotMult: 1.85,
+    reloadMs: 1680,
+    range: 145,
+    spread: 0.006,
+    pellets: 1,
+    recoil: 0.038,
+    adsFov: 54,
+    moveSpeedMult: 1.01,
+    auto: false
+  },
   shotgun: {
     id: 'shotgun',
-    slot: 2,
-    name: 'Escopeta Paisa 12G',
+    slot: 3,
+    name: 'Escopeta de Corredera 12G',
     magSize: 6,
     startAmmo: 18,
     fireRateMs: 780,
@@ -117,8 +145,8 @@ export const WEAPONS = {
   },
   smg: {
     id: 'smg',
-    slot: 3,
-    name: 'Subfusil Táctico SMG',
+    slot: 4,
+    name: 'Subfusil Compacto MP-9',
     magSize: 32,
     startAmmo: 64,
     fireRateMs: 75,
@@ -133,10 +161,28 @@ export const WEAPONS = {
     moveSpeedMult: 1.06,
     auto: true
   },
+  assault_rifle: {
+    id: 'assault_rifle',
+    slot: 5,
+    name: 'Rifle de Asalto M4-T',
+    magSize: 30,
+    startAmmo: 60,
+    fireRateMs: 96,
+    damage: 19,
+    headshotMult: 1.6,
+    reloadMs: 1560,
+    range: 265,
+    spread: 0.0095,
+    pellets: 1,
+    recoil: 0.014,
+    adsFov: 46,
+    moveSpeedMult: 0.98,
+    auto: true
+  },
   rifle: {
     id: 'rifle',
-    slot: 4,
-    name: 'Fusil Andino AK-47',
+    slot: 6,
+    name: 'Fusil Clásico AK-M',
     magSize: 30,
     startAmmo: 60,
     fireRateMs: 112,
@@ -153,8 +199,8 @@ export const WEAPONS = {
   },
   sniper: {
     id: 'sniper',
-    slot: 5,
-    name: 'Francotirador Cóndor .50',
+    slot: 7,
+    name: 'Rifle de Francotirador .338',
     magSize: 5,
     startAmmo: 15,
     fireRateMs: 1150,
@@ -172,11 +218,13 @@ export const WEAPONS = {
 };
 
 export const LOOT_TYPES = {
-  pistol: { id: 'pistol', label: 'Pistola Táctica 9mm', color: '#38bdf8', pickupRadius: 1.65, autoPickup: false },
-  shotgun: { id: 'shotgun', label: 'Escopeta Paisa 12G', color: '#fb923c', pickupRadius: 1.75, autoPickup: false },
-  smg: { id: 'smg', label: 'Subfusil Táctico SMG', color: '#a855f7', pickupRadius: 1.7, autoPickup: false },
-  rifle: { id: 'rifle', label: 'Fusil Andino AK-47', color: '#f59e0b', pickupRadius: 1.75, autoPickup: false },
-  sniper: { id: 'sniper', label: 'Francotirador Cóndor .50', color: '#ef4444', pickupRadius: 1.8, autoPickup: false },
+  pistol: { id: 'pistol', label: 'Pistola Semiautomática 9mm', color: '#38bdf8', pickupRadius: 1.65, autoPickup: false },
+  revolver: { id: 'revolver', label: 'Revólver Clásico .357', color: '#e2e8f0', pickupRadius: 1.68, autoPickup: false },
+  shotgun: { id: 'shotgun', label: 'Escopeta de Corredera 12G', color: '#fb923c', pickupRadius: 1.75, autoPickup: false },
+  smg: { id: 'smg', label: 'Subfusil Compacto MP-9', color: '#a855f7', pickupRadius: 1.7, autoPickup: false },
+  assault_rifle: { id: 'assault_rifle', label: 'Rifle de Asalto M4-T', color: '#10b981', pickupRadius: 1.75, autoPickup: false },
+  rifle: { id: 'rifle', label: 'Fusil Clásico AK-M', color: '#f59e0b', pickupRadius: 1.75, autoPickup: false },
+  sniper: { id: 'sniper', label: 'Rifle de Francotirador .338', color: '#ef4444', pickupRadius: 1.8, autoPickup: false },
   ammo: { id: 'ammo', label: 'Caja de Munición (+36)', color: '#84cc16', amount: 36, pickupRadius: 1.75, autoPickup: true },
   medkit: { id: 'medkit', label: 'Botiquín (+50 HP)', color: '#f43f5e', heal: 50, pickupRadius: 1.75, autoPickup: true },
   bandage: { id: 'bandage', label: 'Vendas Rápidas (+20 HP)', color: '#2dd4bf', heal: 20, pickupRadius: 1.7, autoPickup: true }
@@ -254,6 +302,10 @@ export const SLIDE_CONFIG = {
   frictionDecay: 7.5,
   downhillBoostFactor: 12.0
 };
+
+// Aeronaves de desembarco ("Aviones v1") y duración de secuencia animada en bodega (sit -> stand -> walk_cabin -> ramp_jump)
+export const TRANSPORT_AIRCRAFT_TYPES = ['auto', 'ac130', 'ch47'];
+export const CABIN_DISEMBARK_MS = 1400;
 
 // Física calibrada de Caída Libre de 10 Segundos:
 // Avión a 198m sobre el valle -> 173m de caída libre a ~16.8 m/s (~10.0s en skydiving) -> apertura automática a 25m del suelo

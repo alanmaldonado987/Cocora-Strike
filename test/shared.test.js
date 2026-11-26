@@ -3,11 +3,16 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
   DEFAULT_MAP_SEED,
+  WATER_LEVEL,
+  LAGOON_CONFIG,
+  SWIM_CONFIG,
   FALL_DAMAGE_CONFIG,
   WEAPONS,
   WEAPON_SLOTS,
   computeFallDamage,
   createRNG,
+  getWaterChannelAt,
+  getWaterDepthAt,
   generateCocoraMap,
   raycastVoxels,
   hasLineOfSight,
@@ -16,7 +21,7 @@ import {
 
 // Huella del mapa por defecto. Si cambia, el cliente y el servidor podrían
 // dejar de generar el mismo mundo: actualizarla solo si el cambio es intencional.
-const DEFAULT_MAP_FINGERPRINT = '8532a58acb707cc5de21001cc9ad7e28bf2fa55495166908c5d0d57a420413b6';
+const DEFAULT_MAP_FINGERPRINT = '89a6537abd0f4406313679e4c56d2b77f9aa8817086ebdb8dcaf6a5d93fd4cfb';
 
 function fingerprint(map) {
   const h = createHash('sha256');
@@ -108,4 +113,25 @@ test('todas las armas de los slots existen con datos válidos', () => {
     assert.ok(w, `falta ${id}`);
     assert.ok(w.damage > 0 && w.fireRateMs > 0);
   }
+});
+
+test('puentes de piedra despejados >= 1.2m sobre WATER_LEVEL, laguna nadable y rocas con 3 ejes/color', () => {
+  for (const br of map.bridges) {
+    assert.ok(br.deckY >= WATER_LEVEL + 1.2, `puente bajo en z=${br.z}: deckY=${br.deckY}`);
+    assert.ok(br.leftGround > WATER_LEVEL && br.rightGround > WATER_LEVEL, 'estribos secos sobre el nivel del río');
+  }
+
+  const chLagoon = getWaterChannelAt(LAGOON_CONFIG.centerZ);
+  assert.ok(chLagoon.halfWidth >= 38, `laguna amplia esperada: halfWidth=${chLagoon.halfWidth}`);
+  const depthLagoon = getWaterDepthAt(map, chLagoon.centerX, LAGOON_CONFIG.centerZ);
+  assert.ok(depthLagoon > SWIM_CONFIG.swimDepth + 1.2, `laguna nadable profunda: depth=${depthLagoon}`);
+
+  assert.ok(map.props.boulders.length > 50 && map.props.riverCobbles.length > 30);
+  const sampleRock = map.props.boulders[0];
+  assert.ok(
+    typeof sampleRock.rotX === 'number' &&
+      typeof sampleRock.rotY === 'number' &&
+      typeof sampleRock.rotZ === 'number' &&
+      typeof sampleRock.colorHex === 'string'
+  );
 });

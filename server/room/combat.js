@@ -303,7 +303,9 @@ export const combatMethods = {
       }
 
       const bestDrop =
-        ['sniper', 'rifle', 'shotgun', 'smg', 'pistol'].find((w) => victim.weapons[w]?.unlocked) || 'ammo';
+        ['sniper', 'rifle', 'assault_rifle', 'shotgun', 'smg', 'revolver', 'pistol'].find(
+          (w) => victim.weapons[w]?.unlocked
+        ) || 'ammo';
       this.spawnDroppedLootPair(bestDrop, 'medkit', victim.x, victim.y, victim.z);
 
       let killerLabel = attacker ? attacker.name : 'La Tormenta';

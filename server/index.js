@@ -44,8 +44,11 @@ const io = new Server(server, {
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = '0.0.0.0';
 
-// Servir Three.js localmente desde node_modules (cero dependencias de CDN externas)
+// Servir Three.js y sus addons (GLTFLoader, OBJLoader, FontLoader, TextGeometry, BufferGeometryUtils) localmente desde node_modules
 app.use('/vendor/three', express.static(path.join(ROOT_DIR, 'node_modules', 'three', 'build')));
+app.use('/vendor/three-addons', express.static(path.join(ROOT_DIR, 'node_modules', 'three', 'examples', 'jsm')));
+// Servir estáticamente la carpeta de modelos externos "/Modelos 3D" (soportando espacio codificado %20 en HTTP)
+app.use(['/Modelos 3D', '/Modelos%203D'], express.static(path.join(ROOT_DIR, 'Modelos 3D')));
 // Servir módulo determinista compartido
 app.use('/shared', express.static(path.join(ROOT_DIR, 'shared')));
 // Servir frontend estático

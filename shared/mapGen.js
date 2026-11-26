@@ -14,8 +14,8 @@ import {
   WORLD_HALF,
   WATER_LEVEL,
   RIVER_CENTER_DEPTH,
-  RIVER_EDGE_DEPTH,
   RIVER_FORD_DEPTH,
+  LAGOON_CONFIG,
   DEFAULT_MAP_SEED,
   SURFACE,
   BLOCK
@@ -30,6 +30,7 @@ import {
   worldToGridX,
   worldToGridZ,
   getRiverCenterWorldX,
+  getWaterProfileAt,
   distToSegment
 } from './math.js';
 import {
@@ -127,10 +128,9 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
     [bSouth.x - 25, bSouth.z, fincaOcaso.x + 14, fincaOcaso.z]
   ];
 
-  // 1. Generación base de malla orgánica continua (321x321 vértices)
+  // 1. Generación base de malla orgánica continua (321x321 vértices) con río elevado y laguna nadable
   for (let vz = 0; vz < V; vz++) {
     const wz = (vz - GRID_SIZE / 2) * CELL_SIZE;
-    const riverX = getRiverCenterWorldX(wz);
 
     let fordFactor = 0;
     for (const fz of fordZCoords) {
@@ -194,23 +194,45 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
       }
       const onTrail = minTrailDist < 3.8;
 
-      const distRiver = Math.abs(wx - riverX);
+      const wp = getWaterProfileAt(wx, wz);
       let surf = SURFACE.GRASS_VALLEY;
 
-      if (distRiver < 19.5) {
-        if (distRiver < 8.8) {
-          const centerProfile = smoothstep(1 - distRiver / 8.8);
-          // Lecho relativo a la superficie: misma profundidad aunque cambie WATER_LEVEL
-          const depth = fordFactor > 0.2
-            ? RIVER_FORD_DEPTH
-            : RIVER_CENTER_DEPTH - (1 - centerProfile) * (RIVER_CENTER_DEPTH - RIVER_EDGE_DEPTH);
-          h = WATER_LEVEL - depth;
-          surf = SURFACE.RIVER_BED;
-        } else {
-          const bankT = smoothstep((distRiver - 8.8) / 10.7);
-          const bankBase = WATER_LEVEL + 0.35;
-          h = bankBase + (h - bankBase) * bankT;
-          surf = distRiver < 12.6 ? SURFACE.RIVER_SAND : SURFACE.GRASS_VALLEY;
+      // Corredor aluvial amplio (36m desde la orilla): integra suavemente el valle al nivel del agua sin cañones
+      if (wp.active && wp.distFromEdge < 36.0) {
+        if (wp.distFromEdge > 0) {
+          const valleyT = smoothstep(wp.distFromEdge / 36.0);
+          const meadowTarget = WATER_LEVEL + 1.12 + (micro - 0.5) * 0.42;
+          h = meadowTarget + (h - meadowTarget) * (0.18 + 0.82 * valleyT);
+        }
+
+        if (wp.distFromEdge <= 0) {
+          // Lecho continuo C1 desde 0m en la orilla exacta hasta RIVER_CENTER_DEPTH / LAGOON_CONFIG.maxDepth
+          const inward = Math.max(0, Math.min(1, -wp.distFromEdge / Math.max(1.0, wp.halfWidth)));
+          const bedCurve = smoothstep(Math.min(1, inward / 0.72));
+          const channelMaxDepth =
+            RIVER_CENTER_DEPTH + (LAGOON_CONFIG.maxDepth - RIVER_CENTER_DEPTH) * wp.lagoonFactor;
+          const effMaxDepth =
+            fordFactor > 0.05 && wp.lagoonFactor < 0.05
+              ? channelMaxDepth * (1 - fordFactor) + RIVER_FORD_DEPTH * fordFactor
+              : channelMaxDepth;
+          const depth = effMaxDepth * bedCurve;
+          h = WATER_LEVEL + 0.04 * (1 - smoothstep(inward / 0.16)) - depth;
+          surf = inward < 0.14 ? SURFACE.RIVER_SAND : SURFACE.RIVER_BED;
+        } else if (wp.distFromEdge < 14.5) {
+          // Transición gradual sin cortes verticales: orilla húmeda de arena/grava -> pradera verde del valle
+          const bankT = smoothstep(wp.distFromEdge / 14.5);
+          const shoreEdgeY = WATER_LEVEL + 0.04;
+          h = shoreEdgeY + (h - shoreEdgeY) * bankT;
+          const sandWidth = 4.6 + wp.lagoonFactor * 2.4 + micro * 1.3;
+          surf = wp.distFromEdge < sandWidth ? SURFACE.RIVER_SAND : (poiSurf ?? SURFACE.GRASS_VALLEY);
+        } else if (poiSurf !== null) {
+          surf = poiSurf;
+        } else if (onTrail && h > WATER_LEVEL + 0.45) {
+          surf = SURFACE.DIRT_TRAIL;
+        } else if (inCoffeeTerrace && h > WATER_LEVEL + 1.0) {
+          surf = SURFACE.COFFEE_TERRACE;
+        } else if (h >= 24) {
+          surf = SURFACE.GRASS_MOUNTAIN;
         }
       } else if (poiSurf !== null) {
         surf = poiSurf;
@@ -226,6 +248,26 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
       surfaceGrid[vz * V + vx] = surf;
     }
   }
+
+  // Pasada de suavizado laplaciano ponderado exclusivamente en la franja ribereña y de desembocadura
+  // para eliminar cualquier arista triangular diagonal entre orilla verde, grava húmeda y lecho.
+  const smoothedHeights = new Float32Array(heightGrid);
+  for (let vz = 1; vz < V - 1; vz++) {
+    const wz = (vz - GRID_SIZE / 2) * CELL_SIZE;
+    for (let vx = 1; vx < V - 1; vx++) {
+      const wx = (vx - GRID_SIZE / 2) * CELL_SIZE;
+      const wp = getWaterProfileAt(wx, wz);
+      if (!wp.active || wp.distFromEdge < -2.8 || wp.distFromEdge > 15.5) continue;
+      const idx = vz * V + vx;
+      const avgNeighbors =
+        (heightGrid[idx - 1] +
+          heightGrid[idx + 1] +
+          heightGrid[idx - V] +
+          heightGrid[idx + V]) * 0.25;
+      smoothedHeights[idx] = heightGrid[idx] * 0.58 + avgNeighbors * 0.42;
+    }
+  }
+  heightGrid.set(smoothedHeights);
 
   // Helper de lectura cruda del terreno (malla continua de triángulos)
   function getTerrainHeightAt(wx, wz) {
@@ -259,7 +301,7 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
       if (Math.abs(wz - cz) > halfD + blendMargin) continue;
       for (let vx = vx0; vx <= vx1; vx++) {
         const wx = (vx - GRID_SIZE / 2) * CELL_SIZE;
-        if (Math.abs(wx - getRiverCenterWorldX(wz)) < 16.5) continue;
+        if (getWaterProfileAt(wx, wz).distFromEdge < 5.2) continue;
 
         const dx = Math.max(0, Math.abs(wx - cx) - halfW);
         const dz = Math.max(0, Math.abs(wz - cz) - halfD);
@@ -449,18 +491,24 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
       rightGround
     });
 
-    // Colisionadores de tablero central, rampas suaves (para raycasts/cámara) y barandillas laterales completas
-    colliders.addBox(cx - spanFlatHalf, cx + spanFlatHalf, deckY - 0.34, deckY, bz - widthHalf, bz + widthHalf, true, 'bridge');
-    for (let s = 0; s < 6; s++) {
-      const t0 = s / 6;
-      const t1 = (s + 1) / 6;
+    // Colisionadores alineados con el Puente de Piedra reparado: tablero, 8 tramos suaves de rampa, pretiles completos y pilares inferiores
+    colliders.addBox(cx - spanFlatHalf, cx + spanFlatHalf, deckY - 0.36, deckY, bz - widthHalf, bz + widthHalf, true, 'bridge');
+    for (let s = 0; s < 8; s++) {
+      const t0 = s / 8;
+      const t1 = (s + 1) / 8;
       const lyTop = leftGround + (deckY - leftGround) * t1;
       const ryTop = rightGround + (deckY - rightGround) * t1;
       colliders.addBox(cx - totalHalf + rampLen * t0, cx - totalHalf + rampLen * t1, lyTop - 0.45, lyTop, bz - widthHalf, bz + widthHalf, true, 'bridge_ramp');
       colliders.addBox(cx + totalHalf - rampLen * t1, cx + totalHalf - rampLen * t0, ryTop - 0.45, ryTop, bz - widthHalf, bz + widthHalf, true, 'bridge_ramp');
     }
-    colliders.addBox(cx - totalHalf + 1.0, cx + totalHalf - 1.0, deckY - 0.4, deckY + 1.08, bz - widthHalf - 0.24, bz - widthHalf + 0.12, false, 'railing');
-    colliders.addBox(cx - totalHalf + 1.0, cx + totalHalf - 1.0, deckY - 0.4, deckY + 1.08, bz + widthHalf - 0.12, bz + widthHalf + 0.24, false, 'railing');
+    // Pretiles laterales de piedra sobre el tramo central y las rampas
+    colliders.addBox(cx - totalHalf + 0.6, cx + totalHalf - 0.6, Math.min(leftGround, rightGround) - 0.2, deckY + 1.02, bz - widthHalf - 0.24, bz - widthHalf + 0.14, false, 'railing');
+    colliders.addBox(cx - totalHalf + 0.6, cx + totalHalf - 0.6, Math.min(leftGround, rightGround) - 0.2, deckY + 1.02, bz + widthHalf - 0.14, bz + widthHalf + 0.24, false, 'railing');
+    // Pilares y estribos macizos bajo los arcos del puente (evitan atravesar la mampostería desde el río)
+    for (const pierOffX of [-16.8, -5.6, 5.6, 16.8]) {
+      const bedH = getTerrainHeightAt(cx + pierOffX, bz) - 0.6;
+      colliders.addBox(cx + pierOffX - 1.45, cx + pierOffX + 1.45, bedH, deckY - 0.34, bz - widthHalf, bz + widthHalf, false, 'bridge_pier');
+    }
 
     addLootSpawn(cx, deckY + 0.02, bz, 'ammo', true);
     addLootSpawn(cx + 4.5, deckY + 0.02, bz - 1.0, 'bandage', true);
@@ -1016,8 +1064,9 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
     letterHeight: 4.4
   };
   exclusion.register(cocoraMonument.x, cocoraMonument.z, 18.5);
-  // Basamento escalonado de piedra transitable + colisionadores de letras monumentales C-O-C-O-R-A
+  // Basamento escalonado de piedra transitable + colisionadores de letras monumentales C-O-C-O-R-A + cercha trasera
   colliders.addBox(cocoraMonument.x - 13.8, cocoraMonument.x + 13.8, cocoraMonument.y - 2.4, cocoraMonument.y + 0.68, cocoraMonument.z - 2.1, cocoraMonument.z + 2.1, true, 'monument_plinth');
+  colliders.addBox(cocoraMonument.x - 11.6, cocoraMonument.x + 11.6, cocoraMonument.y + 0.68, cocoraMonument.y + 4.45, cocoraMonument.z - 0.88, cocoraMonument.z - 0.46, false, 'monument_truss');
   const letterCentersX = [-10.5, -6.3, -2.1, 2.1, 6.3, 10.5];
   for (let li = 0; li < letterCentersX.length; li++) {
     const lx = cocoraMonument.x + letterCentersX[li];
@@ -1028,7 +1077,7 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
   addLootSpawn(cocoraMonument.x - 5.2, cocoraMonument.y + 0.04, cocoraMonument.z + 3.4, 'medkit', true);
   addLootSpawn(cocoraMonument.x + 5.2, cocoraMonument.y + 0.04, cocoraMonument.z + 3.4, 'ammo', true);
 
-  // 2. Helicóptero Militar Estrellado en Llamas (partido en dos secciones en la explanada central)
+  // 2. Helicóptero de Ataque AH-64D Apache Siniestrado en Llamas (fuselaje blindado + botalón partido + fragmentos)
   let heliGroundH = WATER_LEVEL + 2.5;
   for (let dz = -7; dz <= 7; dz += 3.5) {
     for (let dx = -10; dx <= 8; dx += 3.5) {
@@ -1037,6 +1086,7 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
   }
   levelRectPlatform(5, -32, 11.5, 8.0, heliGroundH, 5.0, false, SURFACE.SCORCHED_EARTH);
   const helicopterWreck = {
+    modelId: 'ah64d',
     x: 8.2,
     y: Number(heliGroundH.toFixed(3)),
     z: -33.5,
@@ -1044,13 +1094,82 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
     tailX: -1.4,
     tailY: Number(heliGroundH.toFixed(3)),
     tailZ: -29.2,
-    tailYaw: 1.18
+    tailYaw: 1.18,
+    atmosphereRadius: 45.0
   };
   exclusion.register(helicopterWreck.x, helicopterWreck.z, 9.5);
   exclusion.register(helicopterWreck.tailX, helicopterWreck.tailZ, 6.5);
-  // Colisionadores tácticos de cabina inclinada y cola separada
-  colliders.addBox(helicopterWreck.x - 3.6, helicopterWreck.x + 3.6, helicopterWreck.y - 0.5, helicopterWreck.y + 2.55, helicopterWreck.z - 1.65, helicopterWreck.z + 1.65, true, 'heli_hull');
-  colliders.addBox(helicopterWreck.tailX - 2.6, helicopterWreck.tailX + 2.6, helicopterWreck.tailY - 0.4, helicopterWreck.tailY + 1.18, helicopterWreck.tailZ - 0.85, helicopterWreck.tailZ + 0.85, true, 'heli_low');
+  // Colliders físicos suaves alineados con el AH-64D Apache (escala 2.15x): cobertura sólida en fuselaje, EFABs,
+  // morro con M230/TADS, ala izquierda con Hydra/Hellfire, botalón de cola y resto de ala derecha sin atrapar al jugador
+  const hSin = Math.sin(helicopterWreck.yaw);
+  const hCos = Math.cos(helicopterWreck.yaw);
+  const hRightX = hCos;
+  const hRightZ = -hSin;
+  for (const [lzOff, rad, topH] of [
+    [5.10, 0.92, 1.75],
+    [3.55, 1.24, 2.25],
+    [1.80, 1.48, 2.75],
+    [0.10, 1.56, 3.05],
+    [-1.65, 1.32, 2.55]
+  ]) {
+    colliders.addCylinder(
+      helicopterWreck.x + hSin * lzOff,
+      helicopterWreck.z + hCos * lzOff,
+      rad,
+      helicopterWreck.y - 0.5,
+      helicopterWreck.y + topH,
+      'heli_hull'
+    );
+  }
+  // Ala embrionaria izquierda (+X local) con lanzacohetes Hydra-70
+  for (const [latOff, wRad, wTop] of [
+    [1.85, 0.88, 1.95],
+    [3.05, 0.82, 1.75]
+  ]) {
+    colliders.addCylinder(
+      helicopterWreck.x + hRightX * latOff + hSin * 0.3,
+      helicopterWreck.z + hRightZ * latOff + hCos * 0.3,
+      wRad,
+      helicopterWreck.y - 0.4,
+      helicopterWreck.y + wTop,
+      'heli_wing'
+    );
+  }
+  // Botalón de cola partido + estabilizador vertical + fragmentos mayores en el borde del cráter
+  const tSin = Math.sin(helicopterWreck.tailYaw);
+  const tCos = Math.cos(helicopterWreck.tailYaw);
+  for (const [tlOff, tRad, tTop] of [
+    [-2.10, 0.78, 2.25],
+    [-0.70, 0.72, 1.65],
+    [0.75, 0.76, 1.55],
+    [2.05, 0.82, 1.50]
+  ]) {
+    colliders.addCylinder(
+      helicopterWreck.tailX + tSin * tlOff,
+      helicopterWreck.tailZ + tCos * tlOff,
+      tRad,
+      helicopterWreck.tailY - 0.4,
+      helicopterWreck.tailY + tTop,
+      'heli_tail'
+    );
+  }
+  // Fragmento de ala derecha arrancada (+4.35, +1.95) y capó de turbina (-3.55, -2.65) como cobertura baja
+  colliders.addCylinder(
+    helicopterWreck.x + 4.35,
+    helicopterWreck.z + 1.95,
+    1.15,
+    helicopterWreck.y - 0.3,
+    helicopterWreck.y + 1.15,
+    'heli_debris'
+  );
+  colliders.addCylinder(
+    helicopterWreck.x - 3.55,
+    helicopterWreck.z - 2.65,
+    0.95,
+    helicopterWreck.y - 0.3,
+    helicopterWreck.y + 0.95,
+    'heli_debris'
+  );
   addLootSpawn(helicopterWreck.x + 0.6, helicopterWreck.y + 0.05, helicopterWreck.z + 2.4, 'rifle', true);
   addLootSpawn(helicopterWreck.x - 2.4, helicopterWreck.y + 0.05, helicopterWreck.z - 2.2, 'medkit', true);
   addLootSpawn(helicopterWreck.tailX + 1.2, helicopterWreck.tailY + 0.05, helicopterWreck.tailZ + 1.5, 'ammo', true);
@@ -1203,6 +1322,7 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
     ferns: [],
     tallGrass: [],
     boulders: [],
+    riverCobbles: [],
     riverFoam: [],
     stoneWalls: [],
     coffeeSacks: [],
@@ -1212,7 +1332,8 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
     fallenLogs: []
   };
 
-  // Rocas alrededor del cráter de explosión (trinchera natural) y rocas con espuma blanca en el cauce del río
+  // Rocas alrededor del cráter de explosión (trinchera natural) y cantos rodados / peñascos erosionados en río y laguna
+  const craterColors = ['#57534e', '#65605b', '#4d5359'];
   for (let i = 0; i < 10; i++) {
     const ang = (i / 10) * Math.PI * 2 + (rng() - 0.5) * 0.28;
     const rr = craterInnerR + 1.4 + rng() * 1.6;
@@ -1220,19 +1341,85 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
     const rz = craterZ + Math.sin(ang) * rr;
     const ry = getTerrainHeightAt(rx, rz);
     const sz = 1.05 + rng() * 0.85;
-    colliders.addCylinder(rx, rz, sz * 0.44, ry - 0.5, ry + sz * 0.75, 'boulder');
-    props.boulders.push({ x: rx, y: ry, z: rz, scale: sz, rotY: rng() * Math.PI * 2 });
+    colliders.addCylinder(rx, rz, sz * 0.43, ry - 0.5, ry + sz * 0.72, 'boulder');
+    props.boulders.push({
+      x: rx,
+      y: ry,
+      z: rz,
+      scale: sz,
+      sx: sz * (0.9 + rng() * 0.22),
+      sy: sz * (0.82 + rng() * 0.28),
+      sz: sz * (0.9 + rng() * 0.22),
+      rotX: (rng() - 0.5) * 0.45,
+      rotY: rng() * Math.PI * 2,
+      rotZ: (rng() - 0.5) * 0.45,
+      colorHex: craterColors[i % craterColors.length]
+    });
   }
 
-  for (let wz = -WORLD_HALF + 18; wz <= WORLD_HALF - 18; wz += 13.5) {
+  const wetRiverRockColors = ['#46525e', '#3e4a56', '#505e6b', '#4b6154'];
+  for (let wz = -WORLD_HALF + 18; wz <= LAGOON_CONFIG.mouthStartZ - 8; wz += 13.5) {
     const nearBridge = bridges.some((br) => Math.abs(wz - br.z) < 12);
-    if (nearBridge) continue;
+    if (nearBridge || Math.abs(wz + 250) < 4.5) continue;
     const cx = getRiverCenterWorldX(wz) + (rng() - 0.5) * 9.2;
     const bedY = getTerrainHeightAt(cx, wz);
     const rockScale = 1.35 + rng() * 1.15;
-    colliders.addCylinder(cx, wz, rockScale * 0.42, bedY - 0.4, WATER_LEVEL + 0.65, 'boulder');
-    props.boulders.push({ x: cx, y: WATER_LEVEL - 0.28, z: wz, scale: rockScale, rotY: rng() * Math.PI * 2 });
+    const emergenceY = Math.max(bedY + 0.15, WATER_LEVEL - 0.18);
+    colliders.addCylinder(cx, wz, rockScale * 0.42, bedY - 0.4, emergenceY + rockScale * 0.62, 'boulder');
+    props.riverCobbles.push({
+      x: cx,
+      y: emergenceY,
+      z: wz,
+      scale: rockScale,
+      sx: rockScale * (0.95 + rng() * 0.22),
+      sy: rockScale * (0.78 + rng() * 0.22),
+      sz: rockScale * (0.95 + rng() * 0.22),
+      rotX: (rng() - 0.5) * 0.55,
+      rotY: rng() * Math.PI * 2,
+      rotZ: (rng() - 0.5) * 0.55,
+      colorHex: wetRiverRockColors[Math.floor(rng() * wetRiverRockColors.length)]
+    });
     props.riverFoam.push({ x: cx, y: WATER_LEVEL + 0.05, z: wz, scale: rockScale * 0.95, rotY: rng() * Math.PI * 2 });
+  }
+
+  // Cantos rodados húmedos y rocas erosionadas bordeando las orillas del río y la desembocadura de la laguna
+  for (let i = 0; i < 950 && props.riverCobbles.length < 110; i++) {
+    const inLagoonZone = i % 3 === 0;
+    const wz = inLagoonZone
+      ? LAGOON_CONFIG.mouthStartZ + rng() * (LAGOON_CONFIG.endZ - LAGOON_CONFIG.mouthStartZ)
+      : (rng() - 0.5) * (WORLD_SIZE - 44);
+    if (Math.abs(wz + 250) < 4.5 || bridges.some((br) => Math.abs(wz - br.z) < 9.5)) continue;
+    const side = rng() < 0.5 ? -1 : 1;
+    const wpCenter = getWaterProfileAt(getRiverCenterWorldX(wz), wz);
+    if (!wpCenter.active) continue;
+    const shoreOffset = wpCenter.halfWidth + 0.6 + rng() * 6.8;
+    const rx = wpCenter.centerX + side * shoreOffset;
+    if (Math.abs(rx) > WORLD_HALF - 16) continue;
+    const ry = getTerrainHeightAt(rx, rzSafe(wz));
+    if (ry < WATER_LEVEL - 0.15 || getSlopeAt(rx, wz) > 0.72) continue;
+    const sz = 0.68 + Math.pow(rng(), 1.3) * 1.65;
+    if (!exclusion.canPlace(rx, wz, sz * 0.5 + 0.55)) continue;
+    exclusion.register(rx, wz, sz * 0.45 + 0.35);
+    if (sz >= 1.1) {
+      colliders.addCylinder(rx, wz, sz * 0.42, ry - 0.6, ry + sz * 0.58, 'boulder');
+    }
+    props.riverCobbles.push({
+      x: rx,
+      y: ry,
+      z: wz,
+      scale: sz,
+      sx: sz * (0.92 + rng() * 0.28),
+      sy: sz * (0.72 + rng() * 0.28),
+      sz: sz * (0.92 + rng() * 0.28),
+      rotX: (rng() - 0.5) * 0.85,
+      rotY: rng() * Math.PI * 2,
+      rotZ: (rng() - 0.5) * 0.85,
+      colorHex: wetRiverRockColors[Math.floor(rng() * wetRiverRockColors.length)]
+    });
+  }
+
+  function rzSafe(val) {
+    return val;
   }
 
   // Cercas de madera con postes de piedra bordeando los senderos principales
@@ -1249,15 +1436,15 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
       const side = (Math.floor(d / 14) % 2 === 0) ? 1 : -1;
       const fx = ax + dirX * d + perpX * (side * 4.7);
       const fz = az + dirZ * d + perpZ * (side * 4.7);
-      if (Math.abs(fx - getRiverCenterWorldX(fz)) < 19) continue;
+      if (getWaterProfileAt(fx, fz).distFromEdge < 8.5) continue;
       const fy = getTerrainHeightAt(fx, fz);
       const surf = getSurfaceAt(fx, fz);
       if (fy <= WATER_LEVEL + 0.9 || surf === SURFACE.TOWN_COBBLESTONE || surf === SURFACE.SCORCHED_EARTH) continue;
       if (getSlopeAt(fx, fz) > 0.45 || !exclusion.canPlace(fx, fz, 1.8)) continue;
-      const hx = Math.abs(dirX) * 1.7 + 0.22;
-      const hz = Math.abs(dirZ) * 1.7 + 0.22;
+      const hx = Math.abs(dirX) * 1.76 + 0.24;
+      const hz = Math.abs(dirZ) * 1.76 + 0.24;
       exclusion.register(fx, fz, 1.8);
-      colliders.addBox(fx - hx, fx + hx, fy - 0.4, fy + 1.05, fz - hz, fz + hz, false, 'fence');
+      colliders.addBox(fx - hx, fx + hx, fy - 0.4, fy + 1.14, fz - hz, fz + hz, false, 'fence');
       props.fences.push({ x: fx, y: fy, z: fz, scale: 1.0, rotY: fenceRotY });
     }
   }
@@ -1282,7 +1469,7 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
     const dist = hub ? 14 + rng() * hub.r : 0;
     const wx = hub ? hub.x + Math.cos(ang) * dist : (rng() - 0.5) * (WORLD_SIZE - 60);
     const wz = hub ? hub.z + Math.sin(ang) * dist : (rng() - 0.5) * (WORLD_SIZE - 60);
-    if (Math.abs(wx - getRiverCenterWorldX(wz)) < 17) continue;
+    if (getWaterProfileAt(wx, wz).distFromEdge < 7.0) continue;
 
     const gy = getTerrainHeightAt(wx, wz);
     const surf = getSurfaceAt(wx, wz);
@@ -1305,7 +1492,7 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
     const dist = 8 + rng() * (hub.r * 0.85);
     const wx = hub.x + Math.cos(ang) * dist;
     const wz = hub.z + Math.sin(ang) * dist;
-    if (Math.abs(wx - getRiverCenterWorldX(wz)) < 16) continue;
+    if (getWaterProfileAt(wx, wz).distFromEdge < 6.5) continue;
 
     const gy = getTerrainHeightAt(wx, wz);
     if (gy <= WATER_LEVEL + 0.8 || getSurfaceAt(wx, wz) === SURFACE.CAVE_ROCK || getSlopeAt(wx, wz) > 0.45) continue;
@@ -1324,7 +1511,7 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
     const dist = 9 + rng() * (hub.r * 0.9);
     const wx = hub.x + Math.cos(ang) * dist;
     const wz = hub.z + Math.sin(ang) * dist;
-    if (Math.abs(wx - getRiverCenterWorldX(wz)) < 16) continue;
+    if (getWaterProfileAt(wx, wz).distFromEdge < 6.5) continue;
 
     const gy = getTerrainHeightAt(wx, wz);
     if (gy <= WATER_LEVEL + 0.8 || getSurfaceAt(wx, wz) === SURFACE.CAVE_ROCK || getSlopeAt(wx, wz) > 0.48) continue;
@@ -1343,7 +1530,7 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
     const dist = 12 + rng() * hub.r;
     const wx = hub.x + Math.cos(ang) * dist;
     const wz = hub.z + Math.sin(ang) * dist;
-    if (Math.abs(wx - getRiverCenterWorldX(wz)) < 17) continue;
+    if (getWaterProfileAt(wx, wz).distFromEdge < 7.0) continue;
 
     const gy = getTerrainHeightAt(wx, wz);
     if (gy <= WATER_LEVEL + 0.9 || getSurfaceAt(wx, wz) === SURFACE.CAVE_ROCK || getSlopeAt(wx, wz) > 0.35) continue;
@@ -1362,7 +1549,7 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
   for (let i = 0; i < 1800 && props.fences.length < 72; i++) {
     const wx = (rng() - 0.5) * (WORLD_SIZE - 56);
     const wz = (rng() - 0.5) * (WORLD_SIZE - 56);
-    if (Math.abs(wx - getRiverCenterWorldX(wz)) < 17) continue;
+    if (getWaterProfileAt(wx, wz).distFromEdge < 7.0) continue;
 
     const gy = getTerrainHeightAt(wx, wz);
     const surf = getSurfaceAt(wx, wz);
@@ -1371,10 +1558,10 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
 
     const ewOrient = rng() < 0.5;
     const rotY = (ewOrient ? 0 : Math.PI * 0.5) + (rng() - 0.5) * 0.12;
-    const hx = ewOrient ? 1.8 : 0.18;
-    const hz = ewOrient ? 0.18 : 1.8;
+    const hx = ewOrient ? 1.82 : 0.22;
+    const hz = ewOrient ? 0.22 : 1.82;
     exclusion.register(wx, wz, 1.95);
-    colliders.addBox(wx - hx, wx + hx, gy - 0.4, gy + 1.05, wz - hz, wz + hz, false, 'fence');
+    colliders.addBox(wx - hx, wx + hx, gy - 0.4, gy + 1.14, wz - hz, wz + hz, false, 'fence');
     props.fences.push({ x: wx, y: gy, z: wz, scale: 1.0, rotY });
   }
 
@@ -1382,7 +1569,7 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
   for (let i = 0; i < 1600 && props.fallenLogs.length < 46; i++) {
     const wx = (rng() - 0.5) * (WORLD_SIZE - 48);
     const wz = (rng() - 0.5) * (WORLD_SIZE - 48);
-    if (Math.abs(wx - getRiverCenterWorldX(wz)) < 16) continue;
+    if (getWaterProfileAt(wx, wz).distFromEdge < 6.5) continue;
 
     const gy = getTerrainHeightAt(wx, wz);
     const surf = getSurfaceAt(wx, wz);
@@ -1409,7 +1596,7 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
       const rad = Math.sqrt(rng()) * (cz.r - 4);
       const wx = cz.x + Math.cos(ang) * rad + (rng() - 0.5) * 2.8;
       const wz = cz.z + Math.sin(ang) * rad + (rng() - 0.5) * 2.8;
-      if (Math.abs(wx - getRiverCenterWorldX(wz)) < 17) continue;
+      if (getWaterProfileAt(wx, wz).distFromEdge < 7.0) continue;
       const gy = getTerrainHeightAt(wx, wz);
       const surf = getSurfaceAt(wx, wz);
       if (gy <= WATER_LEVEL + 1.0 || surf === SURFACE.DIRT_TRAIL || getSlopeAt(wx, wz) > 0.78) continue;
@@ -1421,17 +1608,30 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
     }
   }
 
-  // Peñascos irregulares Low-Poly (0.8m a 4.5m)
-  for (let i = 0; i < 2000 && props.boulders.length < 175; i++) {
-    const nearRiver = i < 420;
+  // Peñascos irregulares andinos con rotación en 3 ejes, escalas orgánicas y variación cromática (gris andino, húmedo, musgoso)
+  const andeanGreyTints = ['#8a929d', '#7c8591', '#959da8', '#7e848a'];
+  const mossyForestTints = ['#627d59', '#6e8664', '#587252'];
+  const wetBankTints = ['#4b5663', '#535f6d', '#495e54'];
+  for (let i = 0; i < 2000 && props.boulders.length < 165; i++) {
+    const nearWater = i < 340;
     const wz = (rng() - 0.5) * (WORLD_SIZE - 36);
-    const wx = nearRiver
-      ? getRiverCenterWorldX(wz) + (rng() < 0.5 ? -1 : 1) * (10.0 + rng() * 9.5)
-      : (rng() - 0.5) * (WORLD_SIZE - 36);
+    if (Math.abs(wz + 250) < 4.5) continue;
+    let wx;
+    if (nearWater) {
+      const wpC = getWaterProfileAt(getRiverCenterWorldX(wz), wz);
+      if (!wpC.active) continue;
+      wx = wpC.centerX + (rng() < 0.5 ? -1 : 1) * (wpC.halfWidth + 3.2 + rng() * 11.5);
+    } else {
+      wx = (rng() - 0.5) * (WORLD_SIZE - 36);
+    }
+    if (Math.abs(wx) > WORLD_HALF - 16) continue;
+
+    const wpHere = getWaterProfileAt(wx, wz);
+    if (wpHere.active && wpHere.distFromEdge < 1.2) continue;
 
     const gy = getTerrainHeightAt(wx, wz);
     const surf = getSurfaceAt(wx, wz);
-    if (gy < WATER_LEVEL - 0.2 || surf === SURFACE.CAVE_ROCK || surf === SURFACE.TOWN_COBBLESTONE || getSlopeAt(wx, wz) > 0.95) continue;
+    if (gy < WATER_LEVEL + 0.1 || surf === SURFACE.CAVE_ROCK || surf === SURFACE.TOWN_COBBLESTONE || getSlopeAt(wx, wz) > 0.95) continue;
     const sizeMeters = 0.8 + Math.pow(rng(), 1.35) * 3.7;
     const radius = sizeMeters * 0.5;
     if (!exclusion.canPlace(wx, wz, radius + 0.85)) continue;
@@ -1440,14 +1640,36 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
     if (sizeMeters >= 1.1) {
       colliders.addCylinder(wx, wz, radius * 0.86, gy - 0.8, gy + sizeMeters * 0.72, 'boulder');
     }
-    props.boulders.push({ x: wx, y: gy, z: wz, scale: sizeMeters, rotY: rng() * Math.PI * 2 });
+
+    let colorHex;
+    if (wpHere.active && wpHere.distFromEdge < 12.0) {
+      colorHex = wetBankTints[Math.floor(rng() * wetBankTints.length)];
+    } else if (getForestDensity(wx, wz) > 0.42 && gy < 30) {
+      colorHex = mossyForestTints[Math.floor(rng() * mossyForestTints.length)];
+    } else {
+      colorHex = andeanGreyTints[Math.floor(rng() * andeanGreyTints.length)];
+    }
+
+    props.boulders.push({
+      x: wx,
+      y: gy,
+      z: wz,
+      scale: sizeMeters,
+      sx: sizeMeters * (0.88 + rng() * 0.26),
+      sy: sizeMeters * (0.80 + rng() * 0.32),
+      sz: sizeMeters * (0.88 + rng() * 0.26),
+      rotX: (rng() - 0.5) * 0.62,
+      rotY: rng() * Math.PI * 2,
+      rotZ: (rng() - 0.5) * 0.62,
+      colorHex
+    });
   }
 
   // Palmas de Cera frondosas agrupadas orgánicamente con claros (escala 0.75x a 1.45x, rotación 0..2π)
   for (let i = 0; i < 4200 && props.waxPalms.length < 195; i++) {
     const wx = (rng() - 0.5) * (WORLD_SIZE - 42) + (rng() - 0.5) * 6;
     const wz = (rng() - 0.5) * (WORLD_SIZE - 42) + (rng() - 0.5) * 6;
-    if (Math.abs(wx - getRiverCenterWorldX(wz)) < 16) continue;
+    if (getWaterProfileAt(wx, wz).distFromEdge < 6.5) continue;
 
     // Agrupación orgánica: favorece bosquecillos densos y deja claros soleados
     const density = getForestDensity(wx, wz);
@@ -1455,12 +1677,12 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
 
     const gy = getTerrainHeightAt(wx, wz);
     const surf = getSurfaceAt(wx, wz);
-    if (gy < WATER_LEVEL + 1.2 || gy > 44 || surf === SURFACE.CAVE_ROCK || surf === SURFACE.TOWN_COBBLESTONE) continue;
+    if (gy < WATER_LEVEL + 1.0 || gy > 44 || surf === SURFACE.CAVE_ROCK || surf === SURFACE.TOWN_COBBLESTONE) continue;
     if (getSlopeAt(wx, wz) > 0.68 || !exclusion.canPlace(wx, wz, 2.8)) continue;
 
     const scale = 0.75 + rng() * 0.70; // 0.75x a 1.45x
     exclusion.register(wx, wz, 2.55);
-    colliders.addCylinder(wx, wz, 0.33 * scale, gy, gy + 17.5 * scale, 'palm_trunk');
+    colliders.addCylinder(wx, wz, 0.35 * scale, gy - 0.25, gy + 16.4 * scale, 'palm_trunk');
     props.waxPalms.push({ x: wx, y: gy, z: wz, scale, rotY: rng() * Math.PI * 2 });
   }
 
@@ -1468,14 +1690,14 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
   for (let i = 0; i < 4600 && props.cloudTrees.length < 225; i++) {
     const wx = (rng() - 0.5) * (WORLD_SIZE - 38) + (rng() - 0.5) * 5;
     const wz = (rng() - 0.5) * (WORLD_SIZE - 38) + (rng() - 0.5) * 5;
-    if (Math.abs(wx - getRiverCenterWorldX(wz)) < 15) continue;
+    if (getWaterProfileAt(wx, wz).distFromEdge < 5.5) continue;
 
     const density = getForestDensity(wx + 120, wz - 90);
     if (density < 0.36 && rng() > 0.20) continue;
 
     const gy = getTerrainHeightAt(wx, wz);
     const surf = getSurfaceAt(wx, wz);
-    if (gy < WATER_LEVEL + 1.0 || surf === SURFACE.CAVE_ROCK || surf === SURFACE.TOWN_COBBLESTONE) continue;
+    if (gy < WATER_LEVEL + 0.9 || surf === SURFACE.CAVE_ROCK || surf === SURFACE.TOWN_COBBLESTONE) continue;
     if (getSlopeAt(wx, wz) > 0.72 || !exclusion.canPlace(wx, wz, 3.6)) continue;
 
     const scale = 0.75 + rng() * 0.70; // 0.75x a 1.45x
@@ -1530,9 +1752,15 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
     let placed = 0;
     for (let attempt = 0; attempt < 1300 && placed < count; attempt++) {
       const wz = (rng() - 0.5) * (WORLD_SIZE - 90);
-      const wx = riverNear
-        ? getRiverCenterWorldX(wz) + (rng() < 0.5 ? -1 : 1) * (11.5 + rng() * 12)
-        : (rng() - 0.5) * (WORLD_SIZE - 90);
+      let wx;
+      if (riverNear) {
+        const wpC = getWaterProfileAt(getRiverCenterWorldX(wz), wz);
+        if (!wpC.active) continue;
+        wx = wpC.centerX + (rng() < 0.5 ? -1 : 1) * (wpC.halfWidth + 2.5 + rng() * 11.0);
+      } else {
+        wx = (rng() - 0.5) * (WORLD_SIZE - 90);
+      }
+      if (Math.abs(wx) > WORLD_HALF - 20) continue;
 
       if (!riverNear && Math.hypot(wx - salento.x, wz - salento.z) < 62) continue;
       const gy = getTerrainHeightAt(wx, wz);
@@ -1583,7 +1811,9 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
   }
 
   function isInWater(wx, wy, wz) {
-    return Math.abs(wx - getRiverCenterWorldX(wz)) < 9.5 && wy <= WATER_LEVEL + 0.3;
+    if (wy > WATER_LEVEL + 0.3) return false;
+    const wp = getWaterProfileAt(wx, wz);
+    return wp.active && wp.distFromEdge < -0.12;
   }
 
   function isConcealedInBush(wx, wz) {
@@ -1640,7 +1870,8 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
     getBlock(gx, gy, gz) {
       const wx = gridToWorldX(gx);
       const wz = gridToWorldZ(gz);
-      if (gy === 2 && Math.abs(wx - getRiverCenterWorldX(wz)) < 9.0) return BLOCK.WATER;
+      const wp = getWaterProfileAt(wx, wz);
+      if (gy === 2 && wp.active && wp.distFromEdge < 0) return BLOCK.WATER;
       return BLOCK.AIR;
     }
   };

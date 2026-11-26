@@ -5,6 +5,7 @@
 import {
   WORLD_HALF,
   WATER_LEVEL,
+  SWIM_CONFIG,
   PLAYER_RADIUS,
   PLAYER_HEIGHT,
   PLAYER_CROUCH_HEIGHT,
@@ -14,10 +15,13 @@ import {
   PLAYER_SLIDE_EYE_HEIGHT,
   WEAPONS,
   PARACHUTE_CONFIG,
+  CABIN_DISEMBARK_MS,
   HEAL_CONFIG,
   computeFallDamage,
   computeTargetDescentSpeed,
   resolveSlidingHorizontal,
+  getWaterDepthAt,
+  getSwimFloatY,
   isSwimmingAt
 } from '../../shared/mapData.js';
 import { consumeMoveBudget } from '../validation.js';
@@ -32,23 +36,14 @@ export const playerActionsMethods = {
     const clearance = Math.max(0, p.y - floorY);
 
     if (p.state === 'plane' && this.plane) {
-      const backX = -Math.sin(this.plane.yaw) * 7.8;
-      const backZ = -Math.cos(this.plane.yaw) * 7.8;
-      p.state = 'skydiving';
-      p.isSliding = false;
-      p.isCrouching = false;
-      p.onGround = false;
-      p.x = this.plane.x + backX + (Math.random() - 0.5) * 1.0;
-      p.y = this.plane.y - 1.4;
-      p.z = this.plane.z + backZ + (Math.random() - 0.5) * 1.0;
-      const groundAtDrop = this.map.getFloorBelowY(p.x, p.y, p.z);
-      p.jumpAltitude = Math.max(15, p.y - groundAtDrop);
-      p.fallPeakY = p.y;
-      p.vy = -PARACHUTE_CONFIG.freefallInitialSpeed;
-      this.io.emit('player_jumped', {
+      if (p.cabinDisembarkStartAt > 0) return;
+      p.cabinDisembarkStartAt = Date.now();
+      p.cabinProgress = 0.01;
+      p.moveMode = 'stand';
+      this.io.emit('player_cabin_disembark', {
         playerId: p.id,
-        state: 'skydiving',
-        jumpAltitude: p.jumpAltitude
+        seatIndex: p.seatIndex || 0,
+        durationMs: CABIN_DISEMBARK_MS
       });
     } else if (p.state === 'skydiving' && clearance >= PARACHUTE_CONFIG.minClearanceToOpen) {
       p.state = 'parachuting';
@@ -65,6 +60,35 @@ export const playerActionsMethods = {
       p.vy = -computeTargetDescentSpeed(p.jumpAltitude, 'parachuting', p.pitch);
       this.io.emit('player_jumped', { playerId: p.id, state: 'parachuting' });
     }
+  },
+
+  completePlaneExit(p) {
+    if (!p || !p.alive || p.state !== 'plane' || !this.plane) return;
+    const backDist = this.plane.aircraftType === 'ch47' ? 7.95 : 7.75;
+    const backX = -Math.sin(this.plane.yaw) * backDist;
+    const backZ = -Math.cos(this.plane.yaw) * backDist;
+    p.cabinDisembarkStartAt = 0;
+    p.cabinProgress = 1;
+    p.state = 'skydiving';
+    p.moveMode = 'fall';
+    p.isSliding = false;
+    p.isCrouching = false;
+    p.onGround = false;
+    p.x = this.plane.x + backX + (Math.random() - 0.5) * 0.5;
+    p.y = this.plane.y - 1.48;
+    p.z = this.plane.z + backZ + (Math.random() - 0.5) * 0.5;
+    const groundAtDrop = this.map.getFloorBelowY(p.x, p.y, p.z);
+    p.jumpAltitude = Math.max(15, p.y - groundAtDrop);
+    p.fallPeakY = p.y;
+    p.vy = -PARACHUTE_CONFIG.freefallInitialSpeed;
+    this.io.emit('player_jumped', {
+      playerId: p.id,
+      state: 'skydiving',
+      jumpAltitude: p.jumpAltitude,
+      x: p.x,
+      y: p.y,
+      z: p.z
+    });
   },
 
   handlePlayerSlide(socketId, payload = {}) {
@@ -166,16 +190,21 @@ export const playerActionsMethods = {
         if (wasUnprotectedSkydive) p.fallPeakY = Math.max(p.fallPeakY, p.y);
         else p.fallPeakY = p.y;
 
-        if (nearFloor || (data.state === 'ground' && p.y - floorY <= 2.8)) {
-          const landingY = floorY;
+        const waterDepthHere = getWaterDepthAt(this.map, p.x, p.z);
+        const landedInDeepWater = waterDepthHere > SWIM_CONFIG.swimDepth && p.y <= WATER_LEVEL + 0.35;
+
+        if (landedInDeepWater || nearFloor || ((data.state === 'ground' || data.state === 'swimming') && p.y - floorY <= 2.8)) {
+          const landingY = landedInDeepWater ? getSwimFloatY(this.map, p.x, p.z) : floorY;
           const fallDist = p.fallPeakY - landingY;
           p.y = landingY;
           p.state = 'ground';
+          p.isSwimming = landedInDeepWater || isSwimmingAt(this.map, p.x, p.y, p.z);
           p.onGround = true;
           p.vy = 0;
           p.fallPeakY = landingY;
 
-          if (wasUnprotectedSkydive) {
+          // Caer en agua profunda nadable desactiva por completo el daño por caída (0 HP)
+          if (wasUnprotectedSkydive && !p.isSwimming && waterDepthHere <= SWIM_CONFIG.swimDepth) {
             const fallDmg = computeFallDamage(fallDist);
             if (fallDmg > 0) this.damagePlayer(p, fallDmg, null, 'fall', false);
           }
@@ -185,11 +214,7 @@ export const playerActionsMethods = {
         const swimming = isSwimmingAt(this.map, p.x, p.y, p.z);
         p.isSwimming = swimming;
         if (swimming) {
-          // Caer al agua amortigua el golpe; nadando se está "apoyado" (sin acumular altura de caída)
-          if (!p.onGround) {
-            const fallDmg = computeFallDamage((p.fallPeakY - WATER_LEVEL) * 0.4);
-            if (fallDmg > 0) this.damagePlayer(p, fallDmg, null, 'fall', false);
-          }
+          // Aterrizar en cuerpo de agua nadable (> 1.25m) anula 100% el daño por caída y activa flotabilidad
           if (p.healingUntil > 0) this.cancelHealForPlayer(p);
           p.isSliding = false;
           p.isCrouching = false;
@@ -201,8 +226,11 @@ export const playerActionsMethods = {
         } else {
           if (!p.onGround) {
             const fallDist = p.fallPeakY - floorY;
-            const inDeepWater = this.map.isInWater(p.x, floorY, p.z) && WATER_LEVEL - floorY > 1.0;
-            const fallDmg = computeFallDamage(inDeepWater ? fallDist * 0.4 : fallDist);
+            const waterDepth = getWaterDepthAt(this.map, p.x, p.z);
+            const fallDmg =
+              waterDepth > SWIM_CONFIG.swimDepth
+                ? 0
+                : computeFallDamage(waterDepth > 0.45 ? fallDist * 0.5 : fallDist);
             if (fallDmg > 0) this.damagePlayer(p, fallDmg, null, 'fall', false);
           }
           p.onGround = true;

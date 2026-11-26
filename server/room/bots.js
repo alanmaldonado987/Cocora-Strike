@@ -3,6 +3,7 @@
 // Métodos mezclados en GameRoom.prototype (usan `this` como la sala).
 
 import {
+  SWIM_CONFIG,
   PLAYER_RADIUS,
   PLAYER_EYE_HEIGHT,
   WEAPONS,
@@ -12,6 +13,9 @@ import {
   computeFallDamage,
   computeTargetDescentSpeed,
   getRiverCenterWorldX,
+  getWaterDepthAt,
+  getSwimFloatY,
+  isSwimmingAt,
   applyEntitySeparation,
   stepCharacterPhysics,
   senseObstacleAhead,
@@ -229,7 +233,7 @@ export const botsMethods = {
       let bestDist = 85;
       for (const item of this.loot.values()) {
         if (Math.abs(item.y - bot.y) > 4.0) continue; // Priorizar suministros accesibles en su nivel actual
-        const isGun = ['pistol', 'shotgun', 'smg', 'rifle', 'sniper'].includes(item.type);
+        const isGun = ['pistol', 'revolver', 'shotgun', 'smg', 'assault_rifle', 'rifle', 'sniper'].includes(item.type);
         const wantsWeapon = bot.equipped === 'fists' && isGun;
         const wantsHeal =
           bot.hp < 65 &&
@@ -255,6 +259,10 @@ export const botsMethods = {
           ? 1.8
           : bot.equipped === 'shotgun'
           ? 11
+          : bot.equipped === 'revolver'
+          ? 18
+          : bot.equipped === 'assault_rifle'
+          ? 28
           : bot.equipped === 'sniper'
           ? 48
           : 24;
@@ -293,10 +301,18 @@ export const botsMethods = {
     }
 
     const desiredYaw = Math.atan2(desiredGoal.x - bot.x, desiredGoal.z - bot.z);
-    const steered = this.steerWithWhiskers(bot, desiredYaw, 3.4, PLAYER_RADIUS);
+    const botInSwimWater = isSwimmingAt(this.map, bot.x, bot.y, bot.z);
+    // Si el bot tiene poco aliento en la laguna o el río, prioriza salir suavemente hacia la orilla más cercana
+    let targetYaw = desiredYaw;
+    if (botInSwimWater && (bot.breath ?? 100) < 55) {
+      const riverCenter = getRiverCenterWorldX(bot.z);
+      const escapeSide = bot.x >= riverCenter ? 1 : -1;
+      targetYaw = Math.atan2(escapeSide * 48, 0);
+    }
+    const steered = this.steerWithWhiskers(bot, targetYaw, 3.4, PLAYER_RADIUS);
     const moveYaw = steered.yaw;
 
-    if (steered.shouldJump && bot.onGround) {
+    if (steered.shouldJump && bot.onGround && !botInSwimWater) {
       bot.vy = 7.6;
       bot.onGround = false;
       bot.fallPeakY = bot.y;
@@ -305,6 +321,7 @@ export const botsMethods = {
     if (
       this.botDifficulty === 'hard' &&
       bot.onGround &&
+      !botInSwimWater &&
       moveSpeed > 7.0 &&
       now > ai.nextSlideAllowedAt &&
       nearestEnemy &&
@@ -313,8 +330,12 @@ export const botsMethods = {
       ai.slideUntil = now + 850;
       ai.nextSlideAllowedAt = now + 4500;
     }
-    bot.isSliding = bot.healingUntil <= now && now < ai.slideUntil && bot.onGround;
-    if (bot.isSliding) moveSpeed = 10.5;
+    bot.isSliding = !botInSwimWater && bot.healingUntil <= now && now < ai.slideUntil && bot.onGround;
+    if (botInSwimWater) {
+      moveSpeed = moveSpeed > 6.5 ? SWIM_CONFIG.swimSprintSpeed : SWIM_CONFIG.swimSpeed;
+    } else if (bot.isSliding) {
+      moveSpeed = 10.5;
+    }
     if (bot.healingUntil > now) moveSpeed *= HEAL_CONFIG.moveSpeedMult || 0.45;
 
     const prevX = bot.x;
@@ -328,23 +349,29 @@ export const botsMethods = {
       Math.sin(moveYaw) * moveSpeed,
       Math.cos(moveYaw) * moveSpeed,
       dt,
-      22,
+      botInSwimWater ? 0 : 22,
       PLAYER_RADIUS,
       effH
     );
     applyEntitySeparation(bot, allParticipants, PLAYER_RADIUS, dt, this.map);
+    if (botInSwimWater) {
+      bot.y = getSwimFloatY(this.map, bot.x, bot.z);
+      bot.vy = 0;
+      bot.onGround = true;
+    }
 
     if (!bot.onGround) {
       bot.fallPeakY = wasOnGround ? bot.y : Math.max(bot.fallPeakY, bot.y);
     } else if (!wasOnGround) {
-      const fallDmg = computeFallDamage(bot.fallPeakY - bot.y);
+      const waterDepth = getWaterDepthAt(this.map, bot.x, bot.z);
+      const fallDmg = waterDepth > SWIM_CONFIG.swimDepth ? 0 : computeFallDamage(bot.fallPeakY - bot.y);
       bot.fallPeakY = bot.y;
       if (fallDmg > 0) this.damagePlayer(bot, fallDmg, null, 'fall', false);
     } else {
       bot.fallPeakY = bot.y;
     }
 
-    if (nearestEnemy && bot.alive && bot.healingUntil <= now) {
+    if (nearestEnemy && bot.alive && !botInSwimWater && !bot.isSwimming && bot.healingUntil <= now) {
       bot.yaw = Math.atan2(nearestEnemy.x - bot.x, nearestEnemy.z - bot.z);
       const reacted = now - ai.spottedSince >= diffCfg.reactionMs;
       const pauseOver = now >= ai.nextBurstAllowedAt;

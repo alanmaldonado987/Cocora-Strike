@@ -20,10 +20,10 @@ export function getWaterDepthAt(map, x, z) {
   return Math.max(0, WATER_LEVEL - bed);
 }
 
-// ¿Está nadando una entidad con los pies en y? Hace falta agua profunda y estar dentro de ella
-// (no de pie sobre un puente ni todavía cayendo desde arriba).
+// ¿Está nadando una entidad con los pies en y? Se activa cuando la profundidad supera el pecho (> 1.25m)
+// y el personaje está sumergido en la lámina de agua (no sobre un puente ni cayendo en el aire).
 export function isSwimmingAt(map, x, y, z) {
-  return y <= WATER_LEVEL - 0.5 && getWaterDepthAt(map, x, z) >= SWIM_CONFIG.swimDepth;
+  return y <= WATER_LEVEL - 0.35 && getWaterDepthAt(map, x, z) > SWIM_CONFIG.swimDepth;
 }
 
 // Altura de los pies al flotar nadando (nunca por debajo del lecho)

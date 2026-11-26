@@ -165,6 +165,18 @@ export class SoundEngine {
       return;
     }
 
+    if (weaponId === 'revolver') {
+      this._playPunchOsc('sawtooth', 168, 34, 0.19, 0.54 * atten);
+      this.playFilteredNoise(0.20, 1850, 310, 0.60 * atten);
+      return;
+    }
+
+    if (weaponId === 'assault_rifle') {
+      this._playPunchOsc('sawtooth', 215, 52, 0.10, 0.43 * atten);
+      this.playFilteredNoise(0.11, 2150, 520, 0.48 * atten);
+      return;
+    }
+
     if (weaponId === 'rifle') {
       this._playPunchOsc('sawtooth', 175, 42, 0.12, 0.46 * atten);
       this.playFilteredNoise(0.13, 1650, 440, 0.52 * atten);

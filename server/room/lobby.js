@@ -5,6 +5,7 @@
 import {
   DEFAULT_MAP_SEED,
   BOT_DIFFICULTIES,
+  TRANSPORT_AIRCRAFT_TYPES,
   PARACHUTE_CONFIG,
   SWIM_CONFIG,
   generateCocoraMap,
@@ -68,7 +69,7 @@ export const lobbyMethods = {
     }
   },
 
-  configureBots({ botDifficulty, botCount } = {}) {
+  configureBots({ botDifficulty, botCount, aircraftType } = {}) {
     if (this.phase !== 'lobby') return;
     if (botDifficulty && BOT_DIFFICULTIES[botDifficulty]) {
       this.botDifficulty = botDifficulty;
@@ -76,6 +77,9 @@ export const lobbyMethods = {
     if (typeof botCount === 'number' && Number.isFinite(botCount)) {
       this.desiredBotCount = Math.max(0, Math.min(8, Math.round(botCount)));
       this.syncLobbyBotsCount(this.desiredBotCount);
+    }
+    if (aircraftType && TRANSPORT_AIRCRAFT_TYPES.includes(aircraftType)) {
+      this.aircraftPreference = aircraftType;
     }
     this.broadcastLobbyState();
   },
@@ -152,15 +156,19 @@ export const lobbyMethods = {
       players: list,
       botCount,
       botDifficulty: this.botDifficulty,
+      aircraftType: this.aircraftPreference || 'auto',
       countdown: this.lobbyCountdown !== null ? Math.ceil(this.lobbyCountdown) : null
     });
   },
 
-  startGame({ autoFillBots = false, botCount, botDifficulty } = {}) {
+  startGame({ autoFillBots = false, botCount, botDifficulty, aircraftType } = {}) {
     if (this.phase === 'playing') return;
 
     if (botDifficulty && BOT_DIFFICULTIES[botDifficulty]) {
       this.botDifficulty = botDifficulty;
+    }
+    if (aircraftType && TRANSPORT_AIRCRAFT_TYPES.includes(aircraftType)) {
+      this.aircraftPreference = aircraftType;
     }
     if (typeof botCount === 'number' && Number.isFinite(botCount)) {
       this.desiredBotCount = Math.max(0, Math.min(8, Math.round(botCount)));
@@ -201,8 +209,15 @@ export const lobbyMethods = {
     const len = Math.hypot(dx, dz) || 1;
     const planeSpeed = 38;
 
+    const activeAircraft =
+      this.aircraftPreference === 'ac130' || this.aircraftPreference === 'ch47'
+        ? this.aircraftPreference
+        : ((this.matchCounter = (this.matchCounter || 0) + 1) % 2 === 1 ? 'ac130' : 'ch47');
+
     this.plane = {
       active: true,
+      aircraftType: activeAircraft,
+      label: activeAircraft === 'ch47' ? 'CH-47F Chinook' : 'AC-130J Ghostrider',
       x: startX,
       y: planeY,
       z: startZ,
@@ -221,6 +236,8 @@ export const lobbyMethods = {
     let seatCounter = 0;
     for (const p of this.players.values()) {
       p.seatIndex = seatCounter++;
+      p.cabinDisembarkStartAt = 0;
+      p.cabinProgress = 0;
       p.alive = true;
       p.spectating = false;
       p.hp = 100;
@@ -237,7 +254,7 @@ export const lobbyMethods = {
       p.onGround = false;
       p.isSliding = false;
       p.isCrouching = false;
-      p.moveMode = 'idle';
+      p.moveMode = 'seated';
       p.jumpAltitude = PARACHUTE_CONFIG.planeHeightAboveValley;
       p.fallPeakY = this.plane.y;
       p.lastAlertedById = null;

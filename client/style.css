@@ -281,8 +281,8 @@ html, body {
 
 .bot-config-bar {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+  gap: 10px;
   margin-bottom: 12px;
   padding: 10px 12px;
   border-radius: 10px;
@@ -1090,11 +1090,11 @@ kbd {
   background: rgba(15, 23, 42, 0.88);
   border: 2px solid var(--ink-outline);
   border-radius: 7px;
-  padding: 4px 7px;
+  padding: 3px 6px;
   display: flex;
   align-items: center;
-  gap: 4px;
-  font-size: 0.70rem;
+  gap: 3px;
+  font-size: 0.67rem;
   font-weight: 800;
 }
 .w-slot.locked { opacity: 0.36; }

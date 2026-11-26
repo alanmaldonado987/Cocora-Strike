@@ -4,7 +4,8 @@
 import {
   CELL_SIZE,
   GRID_SIZE,
-  WORLD_HALF
+  WORLD_HALF,
+  LAGOON_CONFIG
 } from './config.js';
 
 export function createRNG(seed) {
@@ -78,6 +79,71 @@ export function worldToGridZ(wz) {
 
 export function getRiverCenterWorldX(wz) {
   return -48 + Math.sin(wz * 0.012) * 38 + Math.cos(wz * 0.006) * 18 + wz * 0.07;
+}
+
+/**
+ * Perfil longitudinal continuo del Río Quindío y su Desembocadura / Laguna Andina en el sur.
+ */
+export function getWaterChannelAt(wz) {
+  const centerX = getRiverCenterWorldX(wz);
+  const baseHalfW = 10.4 + Math.sin(wz * 0.024) * 0.65;
+
+  if (wz <= LAGOON_CONFIG.mouthStartZ) {
+    return { centerX, halfWidth: baseHalfW, lagoonFactor: 0, active: true };
+  }
+
+  if (wz >= LAGOON_CONFIG.endZ + 6.0) {
+    return { centerX, halfWidth: 0, lagoonFactor: 0, active: false };
+  }
+
+  const { mouthStartZ, centerZ, endZ, radiusX } = LAGOON_CONFIG;
+  let openT = 0;
+  if (wz <= centerZ) {
+    openT = smoothstep((wz - mouthStartZ) / (centerZ - mouthStartZ));
+  } else {
+    const u = Math.max(0, Math.min(1, (wz - centerZ) / (endZ - centerZ)));
+    openT = Math.sqrt(Math.max(0, 1 - u * u)) * smoothstep(1 - Math.max(0, (u - 0.82) / 0.18));
+  }
+
+  const organicShore = 1 + 0.065 * Math.sin(wz * 0.085 + 0.7) + 0.045 * Math.cos(wz * 0.15 - 0.4);
+  const lagoonHalfW = radiusX * organicShore;
+
+  let halfWidth;
+  if (wz <= centerZ) {
+    halfWidth = baseHalfW + (lagoonHalfW - baseHalfW) * openT;
+  } else {
+    const closeTail = smoothstep(1 - Math.max(0, (wz - (endZ - 8)) / 10));
+    halfWidth = Math.max(baseHalfW * closeTail * 0.65, lagoonHalfW * openT);
+    if (wz > endZ) {
+      halfWidth *= smoothstep(1 - (wz - endZ) / 6.0);
+    }
+  }
+
+  return {
+    centerX,
+    halfWidth,
+    lagoonFactor: openT,
+    active: halfWidth > 0.25
+  };
+}
+
+/**
+ * Perfil transversal completo del cuerpo de agua en (wx, wz): distancia al eje y a la orilla húmeda.
+ */
+export function getWaterProfileAt(wx, wz) {
+  const ch = getWaterChannelAt(wz);
+  const asymOffset = ch.lagoonFactor * (4.2 * Math.sin((wz - 210) * 0.045));
+  const effCenterX = ch.centerX + asymOffset;
+  const distCenter = Math.abs(wx - effCenterX);
+  const distFromEdge = ch.active ? distCenter - ch.halfWidth : 999;
+  return {
+    centerX: effCenterX,
+    halfWidth: ch.halfWidth,
+    lagoonFactor: ch.lagoonFactor,
+    active: ch.active,
+    distCenter,
+    distFromEdge
+  };
 }
 
 export function distToSegment(px, pz, ax, az, bx, bz) {

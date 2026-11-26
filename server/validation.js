@@ -2,7 +2,7 @@
 // Validación de los mensajes que llegan del cliente y límite de frecuencia por socket.
 // Cada sanitizador devuelve un payload limpio o null si el mensaje debe descartarse.
 
-import { BOT_DIFFICULTIES, WEAPONS } from '../shared/mapData.js';
+import { BOT_DIFFICULTIES, TRANSPORT_AIRCRAFT_TYPES, WEAPONS } from '../shared/mapData.js';
 
 const MAX_ID_LENGTH = 64;
 const MAX_COORD = 10000;
@@ -48,10 +48,13 @@ function botConfig(p) {
     out.botDifficulty = p.botDifficulty;
   }
   if (finite(p.botCount)) out.botCount = clamp(Math.round(p.botCount), 0, 8);
+  if (typeof p.aircraftType === 'string' && TRANSPORT_AIRCRAFT_TYPES.includes(p.aircraftType)) {
+    out.aircraftType = p.aircraftType;
+  }
   return out;
 }
 
-const INPUT_STATES = new Set(['ground', 'skydiving', 'parachuting', 'plane']);
+const INPUT_STATES = new Set(['ground', 'skydiving', 'parachuting', 'plane', 'swimming']);
 
 export const sanitizers = {
   join_lobby: (p) => ({ name: sanitizeName(isObject(p) ? p.name : '') }),
@@ -76,7 +79,8 @@ export const sanitizers = {
       isSliding: optionalBool(p.isSliding),
       isCrouching: optionalBool(p.isCrouching),
       isVaulting: optionalBool(p.isVaulting),
-      // Modos como 'crouch_walk' o 'swim_idle' llevan guion bajo
+      isSwimming: optionalBool(p.isSwimming),
+      // Modos como 'crouch_walk', 'swimming' o 'swim_idle' llevan guion bajo
       moveMode: typeof p.moveMode === 'string' && /^[a-z_]{1,16}$/.test(p.moveMode) ? p.moveMode : undefined,
       state: typeof p.state === 'string' && INPUT_STATES.has(p.state) ? p.state : undefined
     };

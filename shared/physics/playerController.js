@@ -24,9 +24,9 @@ import {
   isSwimmingAt,
   getSwimFloatY,
   resolveSlidingHorizontal,
-  stepCharacterPhysics,
-  findVaultableObstacle
-} from '../physics.js';
+  stepCharacterPhysics
+} from './collision.js';
+import { findVaultableObstacle } from './vault.js';
 
 function dampScalar(current, target, lambda, dt) {
   return current + (target - current) * (1 - Math.exp(-lambda * dt));

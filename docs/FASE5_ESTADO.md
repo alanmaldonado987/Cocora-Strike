@@ -39,7 +39,7 @@ Regla: **extraer y organizar código sin cambiar comportamiento**. Un dominio po
 
 ### 2. Shared (`shared/`)
 - [x] `protocol.js` (ids de mensajes, cuantización)
-- [ ] `physics/` — collision.js, raycast.js, playerController.js, vault.js
+- [x] `physics/` — collision.js, raycast.js, playerController.js, vault.js
 - [ ] `map/` — terrain.js, buildings.js, props.js, pois.data.js
 - [ ] Constantes congeladas (`Object.freeze`) para estados (`'ground'`, `'skydiving'`, `moveMode`, …) en `shared/config.js`
 - [ ] Fábrica/registro único de armas en `/shared`
@@ -66,3 +66,4 @@ Regla: **extraer y organizar código sin cambiar comportamiento**. Un dominio po
 | player | `client/js/player.js` → `client/js/player/{avatar,animation,viewmodel,camera,controller,weapons,avatarPerf}.js`; `damp` unificado en `shared/math.js`; imports en `main.js`, `net/network.js`, `ui/lobby.js`, `world.js`, `test/playerZeroAlloc.test.js` | 82 pruebas; humo OK (salto, paracaídas, W, cambio de cámara) |
 | world | `client/js/world.js` → `client/js/world/{world,common,materials,water,foliage,groundCover,lights,sky,terrain,structures,aircraft,loot,wildlife,effects}.js`; constructor delega en `initSharedMaterialCache()`; `damp` desde `shared/math.js` | 82 pruebas; humo OK |
 | protocol | `shared/protocol.js` (C2S/S2C congelados + `quantize`), `test/protocol.test.js`; eventos en `server/index.js`, `server/validation.js`, `server/gameRoom.js`, `server/room/*.js`, `client/js/net/network.js` | 86 pruebas; humo OK; mismos strings en cable |
+| physics | `shared/physics.js` → `shared/physics/{collision,raycast,vault}.js`; `playerController.js` y `mapGen.js` importan de los nuevos módulos; barril `mapData.js` actualizado (+ protocol) | 86 pruebas; humo OK |

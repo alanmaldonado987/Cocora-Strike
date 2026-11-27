@@ -39,7 +39,7 @@ import {
 } from './spatial.js';
 import {
   resolveSlidingHorizontal
-} from './physics.js';
+} from './physics/collision.js';
 
 export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
   const rng = createRNG(seed);

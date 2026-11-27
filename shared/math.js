@@ -31,6 +31,59 @@ export function smoothstep(t) {
   return c * c * (3 - 2 * c);
 }
 
+/**
+ * Resorte armónico críticamente amortiguado (ζ = 1.0) exacto e incondicionalmente estable.
+ * Muta `state` ({ value, vel }) hacia `target` con frecuencia angular natural `omega` (rad/s)
+ * sin sobreoscilación e independiente de los FPS.
+ */
+export function stepCriticallyDampedSpring(state, target, omega, dt) {
+  if (!(dt > 0) || !(omega > 0)) {
+    state.value = target;
+    state.vel = 0;
+    return target;
+  }
+  const delta = state.value - target;
+  const exp = Math.exp(-omega * dt);
+  const c2 = state.vel + omega * delta;
+  state.value = target + (delta + c2 * dt) * exp;
+  state.vel = (state.vel - omega * c2 * dt) * exp;
+  return state.value;
+}
+
+/**
+ * Versión 3D sin asignaciones de memoria del resorte críticamente amortiguado.
+ * Muta `pos` ({x,y,z}) y `vel` ({x,y,z}) hacia `target` ({x,y,z}).
+ */
+export function stepCriticallyDampedSpring3D(pos, vel, target, omega, dt) {
+  if (!(dt > 0) || !(omega > 0)) {
+    pos.x = target.x;
+    pos.y = target.y;
+    pos.z = target.z;
+    vel.x = 0;
+    vel.y = 0;
+    vel.z = 0;
+    return pos;
+  }
+  const exp = Math.exp(-omega * dt);
+
+  const dx = pos.x - target.x;
+  const cx = vel.x + omega * dx;
+  pos.x = target.x + (dx + cx * dt) * exp;
+  vel.x = (vel.x - omega * cx * dt) * exp;
+
+  const dy = pos.y - target.y;
+  const cy = vel.y + omega * dy;
+  pos.y = target.y + (dy + cy * dt) * exp;
+  vel.y = (vel.y - omega * cy * dt) * exp;
+
+  const dz = pos.z - target.z;
+  const cz = vel.z + omega * dz;
+  pos.z = target.z + (dz + cz * dt) * exp;
+  vel.z = (vel.z - omega * cz * dt) * exp;
+
+  return pos;
+}
+
 export function valueNoise2D(x, z, seed) {
   const ix = Math.floor(x);
   const iz = Math.floor(z);

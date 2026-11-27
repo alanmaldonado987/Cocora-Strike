@@ -13,12 +13,16 @@ import {
   PARACHUTE_CONFIG,
   CABIN_DISEMBARK_MS,
   SIM_DT,
+  MOVEMENT_CONFIG,
+  CAMERA_FEEL_CONFIG,
   PLAYER_INPUT_BUTTONS,
   PLAYER_RADIUS,
   PLAYER_EYE_HEIGHT,
   PLAYER_CROUCH_EYE_HEIGHT,
   PLAYER_SLIDE_EYE_HEIGHT,
   SWIM_CONFIG,
+  stepCriticallyDampedSpring,
+  stepCriticallyDampedSpring3D,
   applyEntitySeparation,
   raycastVoxels,
   createStepEvents,
@@ -1333,6 +1337,12 @@ export class LocalPlayerController {
     this.smoothEyeHeight = PLAYER_EYE_HEIGHT;
     this.smoothCamDist = 3.35;
     this.smoothCamPos = new THREE.Vector3(0, 40, -30);
+    this.smoothCamVel = new THREE.Vector3(0, 0, 0);
+    this.eyeHeightSpring = { value: PLAYER_EYE_HEIGHT, vel: 0 };
+    this.camDistSpring = { value: 3.35, vel: 0 };
+    this.fovSpring = { value: CAMERA_FEEL_CONFIG.baseThirdFov, vel: 0 };
+    this.landingSpring = { value: 0, vel: 0 };
+    this.headBobEnabled = CAMERA_FEEL_CONFIG.headBobEnabled;
     this.cameraInitializedOnFoot = false;
     this.cameraLandingOffset = 0;
 
@@ -1418,6 +1428,18 @@ export class LocalPlayerController {
     this.shakeIntensity = intensity;
     this.shakeDuration = Math.max(0.05, durationSec);
     this.shakeTimer = this.shakeDuration;
+  }
+
+  setHeadBobEnabled(enabled) {
+    this.headBobEnabled = Boolean(enabled);
+  }
+
+  applyLandingCameraDip(impactSpeedMps) {
+    if (!(impactSpeedMps > 1.8)) return;
+    const dip = Math.min(CAMERA_FEEL_CONFIG.landingMaxDip, impactSpeedMps * CAMERA_FEEL_CONFIG.landingDipPerMps);
+    this.landingSpring.value = Math.max(-CAMERA_FEEL_CONFIG.landingMaxDip, this.landingSpring.value - dip * 0.65);
+    this.landingSpring.vel -= dip * CAMERA_FEEL_CONFIG.landingSpringOmega * 1.4;
+    this.cameraLandingOffset = this.landingSpring.value;
   }
 
   tryRequestHeal(preferredType = 'medkit') {
@@ -2006,9 +2028,11 @@ export class LocalPlayerController {
           }
 
           if (ev.landed && !ev.landedInDeepWater) {
-            if (ev.landingImpactSpeed > 4.2) {
-              this.cameraLandingOffset = -0.14 * Math.min(2.0, ev.landingImpactSpeed / 11);
-              this.audio.playFootstep(false);
+            if (ev.landingImpactSpeed > 1.8) {
+              this.applyLandingCameraDip(ev.landingImpactSpeed);
+              if (ev.landingImpactSpeed > 4.2) {
+                this.audio.playFootstep(false);
+              }
             }
           }
 
@@ -2121,7 +2145,12 @@ export class LocalPlayerController {
   }
 
   updateCamera(dt, mapData, planeState, worldInstance, movingHoriz, sprinting, sniperAds) {
-    this.cameraLandingOffset = damp(this.cameraLandingOffset, 0, 10, dt);
+    this.cameraLandingOffset = stepCriticallyDampedSpring(
+      this.landingSpring,
+      0,
+      CAMERA_FEEL_CONFIG.landingSpringOmega,
+      dt
+    );
 
     let shakeX = 0;
     let shakeY = 0;
@@ -2139,8 +2168,12 @@ export class LocalPlayerController {
 
     if (this.alive && this.state === 'plane' && planeState && worldInstance) {
       const rig = worldInstance.getActiveAircraftRig?.();
-      this.camera.fov = damp(this.camera.fov, this.planeViewMode === 'plane_exterior' ? 74 : 76, 12, dt);
-      this.camera.updateProjectionMatrix();
+      const targetPlaneFov = this.planeViewMode === 'plane_exterior' ? 74 : 76;
+      const newPlaneFov = stepCriticallyDampedSpring(this.fovSpring, targetPlaneFov, CAMERA_FEEL_CONFIG.fovSpringOmega, dt);
+      if (Math.abs(newPlaneFov - this.camera.fov) > 0.005) {
+        this.camera.fov = newPlaneFov;
+        this.camera.updateProjectionMatrix();
+      }
 
       if (this.planeViewMode === 'cabin_first') {
         const eyeLift = this.isCabinDisembarking ? 1.56 : 1.18;
@@ -2168,50 +2201,86 @@ export class LocalPlayerController {
       }
 
       this.smoothCamPos.copy(this.camera.position);
+      this.smoothCamVel.set(0, 0, 0);
       return;
     }
 
     const wSpec = WEAPONS[this.equipped] || WEAPONS.fists;
-
     const camX = this.x + (this.reconcileOffsetX || 0);
     const camY = this.y + (this.reconcileOffsetY || 0);
     const camZ = this.z + (this.reconcileOffsetZ || 0);
 
+    // Apertura progresiva de FOV (+3° a +5°) proporcional a la velocidad real alcanzada al esprintar/deslizarse
+    const horizSpeed = Math.hypot(this.vx || 0, this.vz || 0);
+    const speedOverWalk = Math.max(
+      0,
+      Math.min(1, (horizSpeed - MOVEMENT_CONFIG.walkSpeed * 0.85) / Math.max(0.5, MOVEMENT_CONFIG.sprintSpeed - MOVEMENT_CONFIG.walkSpeed * 0.85))
+    );
+    const sprintFovFactor = this.isSliding ? 1.0 : sprinting ? speedOverWalk : 0;
+    const sprintFovDelta = CAMERA_FEEL_CONFIG.sprintFovBoostDeg * sprintFovFactor;
+
+    const canApplyBob =
+      this.headBobEnabled &&
+      this.state === 'ground' &&
+      movingHoriz &&
+      this.onGround &&
+      !this.isSliding &&
+      !this.isSwimming;
+    const bobSpeedWeight = Math.min(1.0, horizSpeed / Math.max(1, MOVEMENT_CONFIG.walkSpeed));
+    const bobSprintScale = sprinting ? CAMERA_FEEL_CONFIG.headBobSprintMult : 1.0;
+    const adsBobAtten = this.aimingZoom ? 0.22 : 1.0;
+
     if ((this.cameraMode === 'first' || sniperAds) && this.alive) {
-      let targetFov = 78;
+      let targetFov = CAMERA_FEEL_CONFIG.baseFirstFov + sprintFovDelta;
       if (this.state === 'skydiving') targetFov = 86 + Math.min(8, this.currentDescentSpeed * 0.18);
       else if (this.aimingZoom && this.equipped !== 'fists') targetFov = wSpec.adsFov || 56;
-      else if ((sprinting || this.isSliding) && movingHoriz) targetFov = 84;
-      this.camera.fov = damp(this.camera.fov, targetFov, 14, dt);
-      this.camera.updateProjectionMatrix();
+      const newFirstFov = stepCriticallyDampedSpring(this.fovSpring, targetFov, CAMERA_FEEL_CONFIG.fovSpringOmega, dt);
+      if (Math.abs(newFirstFov - this.camera.fov) > 0.005) {
+        this.camera.fov = newFirstFov;
+        this.camera.updateProjectionMatrix();
+      }
 
       const targetEye = this.isSliding
         ? PLAYER_SLIDE_EYE_HEIGHT
         : this.isCrouching
         ? PLAYER_CROUCH_EYE_HEIGHT
         : PLAYER_EYE_HEIGHT;
-      this.smoothEyeHeight = damp(this.smoothEyeHeight, targetEye, 14, dt);
+      this.smoothEyeHeight = stepCriticallyDampedSpring(
+        this.eyeHeightSpring,
+        targetEye,
+        CAMERA_FEEL_CONFIG.pivotSpringOmega,
+        dt
+      );
 
+      let bobX = 0;
       let bobY = 0;
-      if (this.state === 'ground' && movingHoriz && this.onGround && !this.isSliding && !this.aimingZoom) {
-        bobY = Math.sin(this.walkPhase * 2) * (sprinting ? 0.038 : 0.022);
+      if (canApplyBob) {
+        const ampScale = bobSpeedWeight * bobSprintScale * adsBobAtten;
+        bobX = Math.cos(this.walkPhase) * CAMERA_FEEL_CONFIG.headBobFirstAmpX * ampScale;
+        bobY = Math.sin(this.walkPhase * 2) * CAMERA_FEEL_CONFIG.headBobFirstAmpY * ampScale;
       }
 
       this.camera.position.set(
-        camX + shakeX,
+        camX + _camRightVec.x * bobX + shakeX,
         camY + this.smoothEyeHeight + bobY + this.cameraLandingOffset + shakeY,
-        camZ
+        camZ + _camRightVec.z * bobX
       );
       _camTarget.copy(this.camera.position).addScaledVector(_camLookDir, 35);
       this.camera.lookAt(_camTarget);
       this.smoothCamPos.copy(this.camera.position);
+      this.smoothCamVel.set(0, 0, 0);
       return;
     }
 
-    let targetFov = this.aimingZoom ? (wSpec.adsFov || 54) : sprinting || this.isSliding ? 75 : 70;
+    let targetFov = this.aimingZoom
+      ? (wSpec.adsFov || 54)
+      : CAMERA_FEEL_CONFIG.baseThirdFov + sprintFovDelta;
     if (this.state === 'skydiving') targetFov = 76 + Math.min(8, this.currentDescentSpeed * 0.2);
-    this.camera.fov = damp(this.camera.fov, targetFov, 12, dt);
-    this.camera.updateProjectionMatrix();
+    const newThirdFov = stepCriticallyDampedSpring(this.fovSpring, targetFov, CAMERA_FEEL_CONFIG.fovSpringOmega, dt);
+    if (Math.abs(newThirdFov - this.camera.fov) > 0.005) {
+      this.camera.fov = newThirdFov;
+      this.camera.updateProjectionMatrix();
+    }
 
     let desiredDist = this.aimingZoom ? 2.15 : 3.35;
     let shoulderOffset = this.aimingZoom ? 0.78 : 0.54;
@@ -2227,11 +2296,20 @@ export class LocalPlayerController {
       targetPivotH = 4.5;
     }
 
-    this.smoothEyeHeight = damp(this.smoothEyeHeight, targetPivotH, 14, dt);
+    this.smoothEyeHeight = stepCriticallyDampedSpring(
+      this.eyeHeightSpring,
+      targetPivotH,
+      CAMERA_FEEL_CONFIG.pivotSpringOmega,
+      dt
+    );
+
+    const thirdBobY = canApplyBob
+      ? Math.sin(this.walkPhase * 2) * CAMERA_FEEL_CONFIG.headBobThirdAmpY * bobSpeedWeight * bobSprintScale * adsBobAtten
+      : 0;
 
     _camPivot.set(
       camX + _camRightVec.x * shoulderOffset,
-      camY + this.smoothEyeHeight + this.cameraLandingOffset,
+      camY + this.smoothEyeHeight + thirdBobY + this.cameraLandingOffset,
       camZ + _camRightVec.z * shoulderOffset
     );
 
@@ -2279,8 +2357,11 @@ export class LocalPlayerController {
       unobstructedDist = Math.max(0.42, closestHitDist - CAMERA_COLLISION_OFFSET);
     }
 
-    const distRate = unobstructedDist < this.smoothCamDist ? 34 : 11;
-    this.smoothCamDist = damp(this.smoothCamDist, unobstructedDist, distRate, dt);
+    const distOmega =
+      unobstructedDist < this.camDistSpring.value
+        ? CAMERA_FEEL_CONFIG.distPullInOmega
+        : CAMERA_FEEL_CONFIG.distRecoverOmega;
+    this.smoothCamDist = stepCriticallyDampedSpring(this.camDistSpring, unobstructedDist, distOmega, dt);
 
     _camPos.copy(_camPivot).addScaledVector(_camBackDir, this.smoothCamDist);
     if (mapData) {
@@ -2290,9 +2371,16 @@ export class LocalPlayerController {
 
     if (!this.cameraInitializedOnFoot) {
       this.smoothCamPos.copy(_camPos);
+      this.smoothCamVel.set(0, 0, 0);
       this.cameraInitializedOnFoot = true;
     } else {
-      this.smoothCamPos.lerp(_camPos, 1 - Math.exp(-22 * dt));
+      stepCriticallyDampedSpring3D(
+        this.smoothCamPos,
+        this.smoothCamVel,
+        _camPos,
+        CAMERA_FEEL_CONFIG.followSpringOmega,
+        dt
+      );
     }
 
     this.camera.position.set(

@@ -2,6 +2,7 @@
 // Protocolo de red compartido por servidor (Node) y cliente (navegador): nombres de los mensajes Socket.IO y
 // cuantización de números en los snapshots. Los valores en cable son EXACTAMENTE los mismos strings de siempre;
 // centralizarlos evita errores tipográficos silenciosos (un evento mal escrito nunca llega y no da error).
+// @ts-check
 
 /** Mensajes cliente -> servidor. */
 export const C2S = Object.freeze({

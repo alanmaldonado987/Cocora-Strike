@@ -1,6 +1,7 @@
 // shared/physics/collision.js
 // Colisión con el entorno: profundidad del agua y nado, colisión deslizante horizontal contra cajas/cilindros,
 // separación entre entidades, física de personaje simple (bots) y sensor de obstáculos al frente.
+// @ts-check
 
 import {
   WORLD_HALF,
@@ -11,6 +12,13 @@ import {
   PLAYER_STATE
 } from '../config.js';
 
+/**
+ * Profundidad del río en (x, z): distancia de la superficie al lecho (0 fuera del agua).
+ * @param {import('../mapGen.js').CocoraMap} map
+ * @param {number} x
+ * @param {number} z
+ * @returns {number}
+ */
 export function getWaterDepthAt(map, x, z) {
   if (!map.isInWater(x, WATER_LEVEL, z)) return 0;
   const bed = map.getFloorBelowY(x, WATER_LEVEL, z);
@@ -19,11 +27,26 @@ export function getWaterDepthAt(map, x, z) {
 
 // ¿Está nadando una entidad con los pies en y? Se activa cuando la profundidad supera el pecho (> 1.25m)
 // y el personaje está sumergido en la lámina de agua (no sobre un puente ni cayendo en el aire).
+/**
+ * ¿Nada una entidad con los pies en y? (agua más profunda que el pecho y cuerpo sumergido).
+ * @param {import('../mapGen.js').CocoraMap} map
+ * @param {number} x
+ * @param {number} y
+ * @param {number} z
+ * @returns {boolean}
+ */
 export function isSwimmingAt(map, x, y, z) {
   return y <= WATER_LEVEL - 0.35 && getWaterDepthAt(map, x, z) > SWIM_CONFIG.swimDepth;
 }
 
 // Altura de los pies al flotar nadando (nunca por debajo del lecho)
+/**
+ * Altura de los pies al flotar en (x, z): bajo la superficie, nunca por debajo del lecho.
+ * @param {import('../mapGen.js').CocoraMap} map
+ * @param {number} x
+ * @param {number} z
+ * @returns {number}
+ */
 export function getSwimFloatY(map, x, z) {
   const bed = map.getFloorBelowY(x, WATER_LEVEL, z);
   return Math.max(bed, WATER_LEVEL - SWIM_CONFIG.floatDepth);
@@ -31,6 +54,16 @@ export function getSwimFloatY(map, x, z) {
 
 // ==================== COLISIÓN DESLIZANTE Y RAYCAST ANALÍTICO 3D ====================
 
+/**
+ * Colisión deslizante horizontal: empuja la posición fuera de cajas y cilindros cercanos.
+ * @param {{ colliders: import('../spatial.js').SpatialCollisionIndex }} map
+ * @param {number} x
+ * @param {number} y pies de la entidad
+ * @param {number} z
+ * @param {number} [radius]
+ * @param {number} [height]
+ * @returns {{ x: number, z: number }}
+ */
 export function resolveSlidingHorizontal(map, x, y, z, radius = PLAYER_RADIUS, height = PLAYER_HEIGHT) {
   const limit = WORLD_HALF - 2.2;
   let rx = Math.max(-limit, Math.min(limit, x));
@@ -91,6 +124,18 @@ export function resolveSlidingHorizontal(map, x, y, z, radius = PLAYER_RADIUS, h
   return { x: rx, z: rz };
 }
 
+/**
+ * @typedef {{ x: number, y?: number, z: number, alive?: boolean, state?: string, spectating?: boolean, radius?: number }} SeparableEntity
+ */
+
+/**
+ * Separa suavemente una entidad de las demás para que no se superpongan (muta entity.x/z).
+ * @param {SeparableEntity} entity
+ * @param {Array<SeparableEntity>} others
+ * @param {number} [selfRadius]
+ * @param {number} [dt]
+ * @param {import('../mapGen.js').CocoraMap|null} [map] si se da, valida la nueva posición contra colisiones
+ */
 export function applyEntitySeparation(entity, others, selfRadius = PLAYER_RADIUS, dt = 0.04, map = null) {
   for (const other of others) {
     if (!other || other === entity || other.alive === false) continue;
@@ -119,6 +164,17 @@ export function applyEntitySeparation(entity, others, selfRadius = PLAYER_RADIUS
   }
 }
 
+/**
+ * Física simple de personaje (bots y fauna): gravedad, colisión deslizante y apoyo en suelo/estructuras.
+ * @param {import('../mapGen.js').CocoraMap} map
+ * @param {object} entity estado mutable { x, y, z, vy, onGround, ... }
+ * @param {number} moveX desplazamiento deseado en X este paso (m)
+ * @param {number} moveZ desplazamiento deseado en Z este paso (m)
+ * @param {number} dt segundos
+ * @param {number} [gravity]
+ * @param {number} [radius]
+ * @param {number} [height]
+ */
 export function stepCharacterPhysics(
   map,
   entity,
@@ -201,6 +257,17 @@ export function stepCharacterPhysics(
   }
 }
 
+/**
+ * Sensor de obstáculos al frente (bots): borde del mapa, pendiente excesiva o sólido.
+ * @param {import('../mapGen.js').CocoraMap} map
+ * @param {number} x
+ * @param {number} y
+ * @param {number} z
+ * @param {number} angleRad dirección de avance (yaw)
+ * @param {number} [distance]
+ * @param {number} [radius]
+ * @returns {{ blocked: boolean, dist: number, reason: string|null }}
+ */
 export function senseObstacleAhead(map, x, y, z, angleRad, distance = 3.2, radius = PLAYER_RADIUS) {
   const sinA = Math.sin(angleRad);
   const cosA = Math.cos(angleRad);

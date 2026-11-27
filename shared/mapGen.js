@@ -12,6 +12,7 @@
 //   shared/map/buildings.js  buildStructures
 //   shared/map/props.js      buildProps
 //   shared/map/pois.data.js  coordenadas de POIs (datos fuera del código)
+// @ts-check
 
 import {
   BLOCK,
@@ -30,6 +31,10 @@ import { buildTerrain, createGroundQueries } from './map/terrain.js';
 import { buildStructures } from './map/buildings.js';
 import { buildProps } from './map/props.js';
 
+/**
+ * Genera de forma determinista el Valle del Cocora completo (misma semilla => mismo mapa en cliente y servidor).
+ * @param {number} [seed] semilla del mapa
+ */
 export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
   const ctx = { seed, ...buildTerrain(seed) };
   Object.assign(ctx, buildStructures(ctx));
@@ -153,3 +158,6 @@ export function generateCocoraMap(seed = DEFAULT_MAP_SEED) {
     }
   };
 }
+
+/** Mapa generado por generateCocoraMap (datos + consultas de suelo/agua/colisión). */
+/** @typedef {ReturnType<typeof generateCocoraMap>} CocoraMap */

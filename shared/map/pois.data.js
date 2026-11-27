@@ -2,6 +2,7 @@
 // Datos (no lógica) del Valle del Cocora: coordenadas en metros de los Puntos de Interés, montañas, zonas de
 // terrazas cafeteras y cruces del río Quindío. Separarlos del generador permite ajustar el mapa sin tocar código.
 // Todo está congelado: shared/map/terrain.js crea copias antes de usarlos.
+// @ts-check
 
 /** Puntos de Interés (elevados sobre mesetas naturales, nunca en huecos). */
 export const POIS = Object.freeze({

@@ -43,7 +43,7 @@ Regla: **extraer y organizar código sin cambiar comportamiento**. Un dominio po
 - [x] `map/` — terrain.js, buildings.js, props.js, pois.data.js (generateCocoraMap encadena buildTerrain → buildStructures → createGroundQueries → buildProps en el orden original del RNG)
 - [x] Constantes congeladas (`Object.freeze`) para estados (`'ground'`, `'skydiving'`, `moveMode`, …) en `shared/config.js` (cámara del cliente y `bannerMode` del HUD quedan como strings locales de la vista, no son estado de juego)
 - [x] Fábrica/registro único de armas en `/shared`
-- [ ] `// @ts-check` + JSDoc en todo `/shared`
+- [x] `// @ts-check` + JSDoc en todo `/shared` (`npm run typecheck`; sin código TypeScript)
 
 ### 3. E2E
 - [ ] `test/e2e/lanMultiplayer.spec.js`: 2 clientes, partida con bots desde el host, 30 s de juego
@@ -70,3 +70,4 @@ Regla: **extraer y organizar código sin cambiar comportamiento**. Un dominio po
 | map | `shared/mapGen.js` (orquestador) → `shared/map/{terrain,buildings,props,pois.data}.js`; `test/mapFingerprint.test.js` + `test/fixtures/mapFingerprint.golden.json` (huella del mapa previo a la Fase 5, 3 semillas) | 89 pruebas; mapa bit a bit idéntico |
 | estados | `shared/config.js` (+ PLAYER_STATE, MOVE_MODE, GAME_PHASE, STORM_STATE, WILDLIFE_STATE); ~260 sustituciones vía AST en client/server/shared; `test/stateEnums.test.js` | 91 pruebas; humo OK |
 | armas | `shared/weapons.js` (WEAPON_IDS, WEAPON_REGISTRY, createWeaponInventory, serialize/applyUnlockedWeapons); reemplaza los 3 inventarios a mano de `server/gameRoom.js`, `client/js/main.js` y `client/js/player/controller.js`; `test/weaponRegistry.test.js` | 94 pruebas; humo OK |
+| tipos | `// @ts-check` en los 16 archivos de `shared/`, 42 bloques JSDoc (funciones exportadas + typedef `CocoraMap`), `tsconfig.shared.json`, `typescript` como devDependency solo para verificar; `npm run check` = lint + typecheck + tests | 94 pruebas; tsc sin errores |

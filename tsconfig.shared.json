@@ -1,0 +1,17 @@
+{
+  "//": "Validación estática (sin TypeScript en el código): JSDoc + // @ts-check en shared/. Ejecutar con npm run typecheck.",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": false,
+    "noImplicitThis": true,
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2023"],
+    "types": [],
+    "skipLibCheck": true
+  },
+  "include": ["shared/**/*.js"]
+}

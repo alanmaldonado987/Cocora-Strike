@@ -2,6 +2,7 @@
 // Controlador cinemático determinista compartido entre cliente y servidor.
 // Integra aceleración progresiva en suelo, fricción, control aéreo limitado conservando impulso,
 // nado, vaulting, deslizamiento y caída libre/paracaídas sin depender de Three.js ni del DOM.
+// @ts-check
 
 import {
   WATER_LEVEL,
@@ -30,10 +31,22 @@ import {
 } from './collision.js';
 import { findVaultableObstacle } from './vault.js';
 
+/**
+ * Amortiguación exponencial independiente de los FPS.
+ * @param {number} current
+ * @param {number} target
+ * @param {number} lambda
+ * @param {number} dt
+ * @returns {number}
+ */
 function dampScalar(current, target, lambda, dt) {
   return current + (target - current) * (1 - Math.exp(-lambda * dt));
 }
 
+/**
+ * Eventos producidos por un paso de simulación (aterrizajes, agua, vaulting, deslizamiento...).
+ * Se reutiliza con resetStepEvents para no asignar memoria por paso.
+ */
 export function createStepEvents() {
   return {
     jumped: false,
@@ -58,6 +71,11 @@ export function createStepEvents() {
   };
 }
 
+/**
+ * Reinicia en sitio un objeto de eventos de paso.
+ * @param {ReturnType<typeof createStepEvents>} ev
+ * @returns {ReturnType<typeof createStepEvents>} el mismo objeto
+ */
 export function resetStepEvents(ev) {
   ev.jumped = false;
   ev.landed = false;
@@ -81,6 +99,10 @@ export function resetStepEvents(ev) {
   return ev;
 }
 
+/**
+ * Estado cinemático completo del jugador compartido por cliente (predicción) y servidor (autoridad).
+ * @param {object} [overrides] valores iniciales a sobrescribir
+ */
 export function createPlayerKinematicState(overrides = {}) {
   return {
     x: 0,
@@ -131,6 +153,12 @@ export function createPlayerKinematicState(overrides = {}) {
 }
 
 // Fricción progresiva en suelo: frena suavemente al soltar teclas o al superar la velocidad objetivo
+/**
+ * Fricción en suelo sobre la velocidad horizontal (muta state.vx/vz).
+ * @param {{ vx: number, vz: number }} state
+ * @param {number} dt
+ * @param {typeof MOVEMENT_CONFIG} [cfg]
+ */
 export function applyGroundFriction(state, dt, cfg = MOVEMENT_CONFIG) {
   const speed = Math.hypot(state.vx || 0, state.vz || 0);
   if (speed < 1e-5) {
@@ -147,6 +175,12 @@ export function applyGroundFriction(state, dt, cfg = MOVEMENT_CONFIG) {
 }
 
 // Arrastre horizontal sutil en el aire: conserva el impulso del salto/slide
+/**
+ * Fricción en el aire (mucho menor: se conserva el impulso).
+ * @param {{ vx: number, vz: number }} state
+ * @param {number} dt
+ * @param {typeof MOVEMENT_CONFIG} [cfg]
+ */
 export function applyAirFriction(state, dt, cfg = MOVEMENT_CONFIG) {
   if (cfg.airFriction <= 0) return;
   const factor = Math.max(0, 1 - cfg.airFriction * dt);
@@ -155,6 +189,15 @@ export function applyAirFriction(state, dt, cfg = MOVEMENT_CONFIG) {
 }
 
 // Aceleración direccional proyectada (estilo Quake/Source): no recorta velocidad excedente previa
+/**
+ * Aceleración progresiva hacia la dirección deseada sin superar wishSpeed en esa dirección.
+ * @param {{ vx: number, vz: number }} state
+ * @param {number} wishDirX
+ * @param {number} wishDirZ
+ * @param {number} wishSpeed m/s
+ * @param {number} accel m/s²
+ * @param {number} dt
+ */
 export function accelerateHorizontal(state, wishDirX, wishDirZ, wishSpeed, accel, dt) {
   if (wishSpeed <= 0 || (wishDirX === 0 && wishDirZ === 0)) return;
   const vx = state.vx || 0;
@@ -167,6 +210,12 @@ export function accelerateHorizontal(state, wishDirX, wishDirZ, wishSpeed, accel
   state.vz = vz + wishDirZ * accelSpeed;
 }
 
+/**
+ * Recorta la velocidad contra la normal de colisión cuando la posición deseada fue empujada.
+ * @param {{ x: number, z: number, vx: number, vz: number }} state
+ * @param {number} desiredX
+ * @param {number} desiredZ
+ */
 function clipVelocityAgainstCollision(state, desiredX, desiredZ) {
   const pushX = state.x - desiredX;
   const pushZ = state.z - desiredZ;
@@ -182,6 +231,16 @@ function clipVelocityAgainstCollision(state, desiredX, desiredZ) {
 }
 
 // Comprueba que la cápsula completa [footY + 0.05, footY + height] esté libre de techos y muros sólidos
+/**
+ * ¿Cabe la cápsula del jugador en (x, footY, z)? (para ponerse de pie tras agacharse/deslizarse).
+ * @param {import('../mapGen.js').CocoraMap} map
+ * @param {number} x
+ * @param {number} footY
+ * @param {number} z
+ * @param {number} [radius]
+ * @param {number} [height]
+ * @returns {boolean}
+ */
 export function hasCapsuleClearance(map, x, footY, z, radius = PLAYER_RADIUS, height = PLAYER_HEIGHT) {
   if (!map?.colliders) return true;
   const yBottom = footY + 0.05;
@@ -210,6 +269,10 @@ export function hasCapsuleClearance(map, x, footY, z, radius = PLAYER_RADIUS, he
 }
 
 // Obtiene la superficie de soporte bajo los pies incluyendo escalones/bordillos sólidos hasta maxReachAboveFeet
+/**
+ * Altura de la superficie de apoyo más alta bajo los pies (terreno o techo transitable).
+ * @returns {number}
+ */
 function querySupportSurfaceY(map, wx, wy, wz, radius = PLAYER_RADIUS, maxReachAboveFeet = 0.10) {
   let bestY = map.getFloorBelowY(wx, wy + maxReachAboveFeet, wz);
   if (!map?.colliders) return bestY;
@@ -241,6 +304,9 @@ function querySupportSurfaceY(map, wx, wy, wz, radius = PLAYER_RADIUS, maxReachA
 }
 
 // Integrador horizontal + vertical con subida automática de escalones (stepUp <= 0.45 m) y adhesión en bajadas (snapToGround)
+/**
+ * Integra el motor de movimiento en suelo/aire: aceleración, fricción, gravedad, escalones y colisión.
+ */
 function integrateGroundAirMotor(map, state, dt, radius, height, wasOnGround, jumpedThisTick, ev, cfg = MOVEMENT_CONFIG) {
   const startX = state.x;
   const startY = state.y;
@@ -393,6 +459,15 @@ function integrateGroundAirMotor(map, state, dt, radius, height, wasOnGround, ju
   clipVelocityAgainstCollision(state, desiredX, desiredZ);
 }
 
+/**
+ * Avanza un paso fijo (SIM_DT) la simulación determinista del jugador. Misma función en cliente y servidor.
+ * @param {ReturnType<typeof createPlayerKinematicState>} state estado mutable
+ * @param {{ seq?: number, buttons?: number, moveX?: number, moveZ?: number, yaw?: number, pitch?: number, equipped?: string }} input
+ * @param {number} dt segundos (SIM_DT)
+ * @param {import('../mapGen.js').CocoraMap} map
+ * @param {{ eventsOut?: ReturnType<typeof createStepEvents>, reloading?: boolean }} [options]
+ * @returns {ReturnType<typeof createStepEvents>} eventos del paso
+ */
 export function stepPlayer(state, input, dt, map, options = {}) {
   const ev = options.eventsOut ? resetStepEvents(options.eventsOut) : createStepEvents();
   if (!state || !map || !(dt > 0)) return ev;

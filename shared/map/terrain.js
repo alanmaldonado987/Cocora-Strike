@@ -1,5 +1,6 @@
 // shared/map/terrain.js
 // Generación del terreno del Valle del Cocora y consultas de altura del suelo (deterministas, cliente y servidor).
+// @ts-check
 
 import {
   CELL_SIZE,

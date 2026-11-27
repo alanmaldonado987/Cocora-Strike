@@ -1,5 +1,6 @@
 // shared/config.js
 // Constantes del juego: mundo, jugador, armas, botín, bots, tormenta, caída y paracaídas.
+// @ts-check
 
 // ==================== ESTADOS (constantes congeladas) ====================
 // Valores en cable idénticos a los strings históricos: cliente, servidor y snapshots siguen siendo compatibles.
@@ -338,6 +339,12 @@ export const FALL_DAMAGE_CONFIG = {
   lethalDamage: 100
 };
 
+/**
+ * Daño por caída según la distancia caída: 0 bajo la altura segura, progresivo hasta la severa y letal por encima.
+ * @param {number} fallDistance metros caídos desde el punto más alto
+ * @param {typeof FALL_DAMAGE_CONFIG} [cfg]
+ * @returns {number} puntos de vida a restar (entero)
+ */
 export function computeFallDamage(fallDistance, cfg = FALL_DAMAGE_CONFIG) {
   if (!Number.isFinite(fallDistance) || fallDistance <= cfg.safeFallHeight) return 0;
   if (fallDistance > cfg.severeFallHeight) return cfg.lethalDamage;
@@ -537,12 +544,27 @@ export const WILDLIFE_TYPES = {
   }
 };
 
+/**
+ * Factor 0..1 de la altura de salto respecto al rango de referencia del paracaídas.
+ * @param {number} [jumpAltitude] altura sobre el suelo al saltar (m)
+ * @param {typeof PARACHUTE_CONFIG} [cfg]
+ * @returns {number}
+ */
 export function getJumpHeightFactor(jumpAltitude = 198, cfg = PARACHUTE_CONFIG) {
   const span = Math.max(1, cfg.maxJumpHeightRef - cfg.minJumpHeightRef);
   const raw = Math.max(0, Math.min(1, (jumpAltitude - cfg.minJumpHeightRef) / span));
   return cfg.heightSpeedMode === 'slower_from_high' ? 1 - raw : raw;
 }
 
+/**
+ * Velocidad de descenso objetivo (m/s, positiva hacia abajo) en caída libre o con el paracaídas abierto.
+ * La inclinación hacia abajo (pitch negativo) acelera la caída; mirar al frente planea.
+ * @param {number} jumpAltitude altura de salto (m)
+ * @param {string} state PLAYER_STATE.SKYDIVING o PLAYER_STATE.PARACHUTING
+ * @param {number} [pitch] inclinación de la vista (rad)
+ * @param {typeof PARACHUTE_CONFIG} [cfg]
+ * @returns {number}
+ */
 export function computeTargetDescentSpeed(jumpAltitude, state, pitch = 0, cfg = PARACHUTE_CONFIG) {
   const factor = getJumpHeightFactor(jumpAltitude, cfg);
   if (state === PLAYER_STATE.PARACHUTING) {

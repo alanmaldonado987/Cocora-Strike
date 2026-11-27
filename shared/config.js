@@ -517,3 +517,11 @@ export const CLIENT_PERF_CONFIG = {
   damageFlashDurationMs: 190  // Duración en ms del destello de daño antes de atenuarse
 };
 
+export const BOT_AI_CONFIG = {
+  visionHz: 8,                // Frecuencia de evaluación de visión/LOS de bots (8 Hz, dentro de 5–10 Hz)
+  visionIntervalMs: 125,      // Intervalo en ms entre escaneos completos de objetivos por bot (1000 / 8)
+  staggerStepMs: 16,          // Desfase inicial por bot (ms) para repartir raycasts entre distintos ticks
+  doorSenseRadius: 2.1,       // Radio horizontal (m) para abrir puertas cercanas usando la grilla espacial
+  doorSenseVertical: 1.6      // Diferencia máxima de cota (m) para interactuar con una puerta
+};
+

@@ -7,7 +7,9 @@ import {
   PLAYER_RADIUS,
   PLAYER_EYE_HEIGHT,
   WEAPONS,
+  WEAPON_SLOTS,
   BOT_DIFFICULTIES,
+  BOT_AI_CONFIG,
   PARACHUTE_CONFIG,
   HEAL_CONFIG,
   computeFallDamage,
@@ -23,10 +25,21 @@ import {
 } from '../../shared/mapData.js';
 import { normalizeAngle } from './constants.js';
 
+const BOT_GUN_TYPES = new Set(WEAPON_SLOTS);
+const _botEyeVec = { x: 0, y: 0, z: 0 };
+const _botTargetProbe = { x: 0, y: 0, z: 0 };
+const _botShotOrigin = { x: 0, y: 0, z: 0 };
+const _botShotDir = { x: 0, y: 0, z: 0 };
+const _steerOut = { yaw: 0, shouldJump: false };
+
 export const botsMethods = {
   steerWithWhiskers(entity, desiredYaw, lookDist = 3.4, radius = PLAYER_RADIUS) {
     const front = senseObstacleAhead(this.map, entity.x, entity.y, entity.z, desiredYaw, lookDist, radius);
-    if (!front.blocked) return { yaw: desiredYaw, shouldJump: false };
+    if (!front.blocked) {
+      _steerOut.yaw = desiredYaw;
+      _steerOut.shouldJump = false;
+      return _steerOut;
+    }
 
     const leftAngle = desiredYaw + 0.7;
     const rightAngle = desiredYaw - 0.7;
@@ -34,13 +47,22 @@ export const botsMethods = {
     const right = senseObstacleAhead(this.map, entity.x, entity.y, entity.z, rightAngle, lookDist, radius);
 
     const shouldJump = front.reason === 'steep' && front.dist < 1.8;
+    _steerOut.shouldJump = shouldJump;
 
-    if (!left.blocked && right.blocked) return { yaw: leftAngle, shouldJump };
-    if (!right.blocked && left.blocked) return { yaw: rightAngle, shouldJump };
-    if (!left.blocked && !right.blocked) {
-      return { yaw: left.dist >= right.dist ? leftAngle : rightAngle, shouldJump };
+    if (!left.blocked && right.blocked) {
+      _steerOut.yaw = leftAngle;
+      return _steerOut;
     }
-    return { yaw: left.dist >= right.dist ? desiredYaw + 1.45 : desiredYaw - 1.45, shouldJump };
+    if (!right.blocked && left.blocked) {
+      _steerOut.yaw = rightAngle;
+      return _steerOut;
+    }
+    if (!left.blocked && !right.blocked) {
+      _steerOut.yaw = left.dist >= right.dist ? leftAngle : rightAngle;
+      return _steerOut;
+    }
+    _steerOut.yaw = left.dist >= right.dist ? desiredYaw + 1.45 : desiredYaw - 1.45;
+    return _steerOut;
   },
 
   resolveRiverCrossingWaypoint(x, z, goalX, goalZ) {
@@ -92,14 +114,18 @@ export const botsMethods = {
       if (cosAng < -0.3) return false;
     }
 
-    const botEye = { x: bot.x, y: bot.y + PLAYER_EYE_HEIGHT, z: bot.z };
-    const targetChestY = other.y + this.getParticipantHeight(other) * 0.62;
-    const targetHeadY = other.y + this.getParticipantHeight(other) * 0.88;
-
-    return (
-      hasLineOfSight(this.map, botEye, { x: other.x, y: targetChestY, z: other.z }, 0.1) ||
-      hasLineOfSight(this.map, botEye, { x: other.x, y: targetHeadY, z: other.z }, 0.1)
-    );
+    _botEyeVec.x = bot.x;
+    _botEyeVec.y = bot.y + PLAYER_EYE_HEIGHT;
+    _botEyeVec.z = bot.z;
+    const otherHeight = this.getParticipantHeight(other);
+    _botTargetProbe.x = other.x;
+    _botTargetProbe.y = other.y + otherHeight * 0.62;
+    _botTargetProbe.z = other.z;
+    if (hasLineOfSight(this.map, _botEyeVec, _botTargetProbe, 0.1)) {
+      return true;
+    }
+    _botTargetProbe.y = other.y + otherHeight * 0.88;
+    return hasLineOfSight(this.map, _botEyeVec, _botTargetProbe, 0.1);
   },
 
   updateBot(bot, dt, now, allParticipants) {
@@ -168,22 +194,8 @@ export const botsMethods = {
     }
 
     if (bot.healingUntil <= 0 && bot.onGround) {
-      // Permitir a los bots abrir puertas cerradas cercanas para entrar o salir de casas
-      for (const door of this.doorsById.values()) {
-        if (!door.destroyed && !door.isOpen && Math.hypot(door.x - bot.x, door.z - bot.z) < 2.1 && Math.abs(door.y - bot.y) < 1.6) {
-          door.isOpen = true;
-          if (door.collider) door.collider.enabled = false;
-          this.io.emit('door_state_changed', {
-            doorId: door.id,
-            isOpen: true,
-            hp: door.hp,
-            destroyed: false,
-            x: door.x,
-            y: door.y,
-            z: door.z
-          });
-        }
-      }
+      // Consultar puertas cercanas mediante la grilla espacial (tag === 'door') en vez de iterar doorsById completo
+      this.openNearbyClosedDoorsForEntity(bot);
       if (bot.hp < 60 && bot.medkits > 0) {
         bot.healingItem = 'medkit';
         bot.healingUntil = now + (HEAL_CONFIG.durationMs || 2000);
@@ -193,14 +205,33 @@ export const botsMethods = {
       }
     }
 
+    // Selección de objetivo y raycasts LOS escalonados por bot a 8 Hz (BOT_AI_CONFIG.visionIntervalMs)
     let nearestEnemy = null;
     let nearestEnemyDist = diffCfg.visionRange;
-    for (const other of allParticipants) {
-      if (other.id === bot.id || !other.alive || other.state === 'plane' || other.spectating) continue;
-      const d = Math.hypot(other.x - bot.x, other.z - bot.z);
-      if (d < nearestEnemyDist && this.canBotSeeTarget(bot, other, nearestEnemyDist, now)) {
-        nearestEnemy = other;
-        nearestEnemyDist = d;
+    if (now >= (ai.nextVisionCheckAt || 0)) {
+      ai.nextVisionCheckAt = now + BOT_AI_CONFIG.visionIntervalMs;
+      for (let i = 0; i < allParticipants.length; i++) {
+        const other = allParticipants[i];
+        if (other.id === bot.id || !other.alive || other.state === 'plane' || other.spectating) continue;
+        const d = Math.hypot(other.x - bot.x, other.z - bot.z);
+        if (d < nearestEnemyDist && this.canBotSeeTarget(bot, other, nearestEnemyDist, now)) {
+          nearestEnemy = other;
+          nearestEnemyDist = d;
+        }
+      }
+      ai.cachedTargetId = nearestEnemy ? nearestEnemy.id : null;
+    } else if (ai.cachedTargetId) {
+      const cached = this.players.get(ai.cachedTargetId);
+      if (cached && cached.alive && cached.state !== 'plane' && !cached.spectating) {
+        const d = Math.hypot(cached.x - bot.x, cached.z - bot.z);
+        if (d <= diffCfg.visionRange) {
+          nearestEnemy = cached;
+          nearestEnemyDist = d;
+        } else {
+          ai.cachedTargetId = null;
+        }
+      } else {
+        ai.cachedTargetId = null;
       }
     }
 
@@ -233,7 +264,7 @@ export const botsMethods = {
       let bestDist = 85;
       for (const item of this.loot.values()) {
         if (Math.abs(item.y - bot.y) > 4.0) continue; // Priorizar suministros accesibles en su nivel actual
-        const isGun = ['pistol', 'revolver', 'shotgun', 'smg', 'assault_rifle', 'rifle', 'sniper'].includes(item.type);
+        const isGun = BOT_GUN_TYPES.has(item.type);
         const wantsWeapon = bot.equipped === 'fists' && isGun;
         const wantsHeal =
           bot.hp < 65 &&
@@ -379,22 +410,20 @@ export const botsMethods = {
       if (reacted && pauseOver && Math.random() < diffCfg.fireChance) {
         const wSpec = WEAPONS[bot.equipped];
         const aimTargetY = nearestEnemy.y + this.getParticipantHeight(nearestEnemy) * 0.62;
-        const origin = { x: bot.x, y: bot.y + PLAYER_EYE_HEIGHT, z: bot.z };
-        const clearShot = hasLineOfSight(
-          this.map,
-          origin,
-          { x: nearestEnemy.x, y: aimTargetY, z: nearestEnemy.z },
-          0.1
-        );
+        _botShotOrigin.x = bot.x;
+        _botShotOrigin.y = bot.y + PLAYER_EYE_HEIGHT;
+        _botShotOrigin.z = bot.z;
+        _botTargetProbe.x = nearestEnemy.x;
+        _botTargetProbe.y = aimTargetY;
+        _botTargetProbe.z = nearestEnemy.z;
+        const clearShot = hasLineOfSight(this.map, _botShotOrigin, _botTargetProbe, 0.1);
 
         if (wSpec && clearShot && nearestEnemyDist <= wSpec.range * 0.85) {
           const baseJitter = 0.055 * diffCfg.spreadMult;
-          const aimDir = {
-            x: nearestEnemy.x - origin.x + (Math.random() - 0.5) * baseJitter * nearestEnemyDist,
-            y: aimTargetY - origin.y + (Math.random() - 0.5) * baseJitter * nearestEnemyDist,
-            z: nearestEnemy.z - origin.z + (Math.random() - 0.5) * baseJitter * nearestEnemyDist
-          };
-          this.executeAuthoritativeShot(bot, origin, aimDir, bot.equipped, diffCfg.damageMult);
+          _botShotDir.x = nearestEnemy.x - _botShotOrigin.x + (Math.random() - 0.5) * baseJitter * nearestEnemyDist;
+          _botShotDir.y = aimTargetY - _botShotOrigin.y + (Math.random() - 0.5) * baseJitter * nearestEnemyDist;
+          _botShotDir.z = nearestEnemy.z - _botShotOrigin.z + (Math.random() - 0.5) * baseJitter * nearestEnemyDist;
+          this.executeAuthoritativeShot(bot, _botShotOrigin, _botShotDir, bot.equipped, diffCfg.damageMult);
 
           if (Math.random() < 0.35) {
             ai.nextBurstAllowedAt = now + diffCfg.burstPauseMs;

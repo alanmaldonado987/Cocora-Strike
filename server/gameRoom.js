@@ -15,6 +15,7 @@ import {
   PARACHUTE_CONFIG,
   CABIN_DISEMBARK_MS,
   SWIM_CONFIG,
+  BOT_AI_CONFIG,
   generateCocoraMap,
   applyEntitySeparation
 } from '../shared/mapData.js';
@@ -51,6 +52,8 @@ export class GameRoom {
     this.nextLootId = 1;
     this.nextAnimalId = 1;
     this.nextColorIdx = 0;
+    this.nextBotStaggerIdx = 0;
+    this._participantsBuf = [];
 
     this.plane = null;
     this.storm = this.createInitialStorm();
@@ -131,23 +134,29 @@ export class GameRoom {
       reloadWeapon: null,
       lastShotAt: 0,
       ai: isBot
-        ? {
-            jumpDelay: 1.5 + Math.random() * 9.5,
-            wanderAngle: Math.random() * Math.PI * 2,
-            nextDecisionAt: 0,
-            strafeDir: Math.random() < 0.5 ? -1 : 1,
-            targetPoint: null,
-            spottedTargetId: null,
-            spottedSince: 0,
-            nextBurstAllowedAt: 0,
-            stuckRefX: 0,
-            stuckRefZ: 0,
-            stuckTimer: 0,
-            evadeUntil: 0,
-            evadeYaw: 0,
-            slideUntil: 0,
-            nextSlideAllowedAt: 0
-          }
+        ? (() => {
+            const staggerOffsetMs = (this.nextBotStaggerIdx++ % 8) * BOT_AI_CONFIG.staggerStepMs;
+            return {
+              jumpDelay: 1.5 + Math.random() * 9.5,
+              wanderAngle: Math.random() * Math.PI * 2,
+              nextDecisionAt: 0,
+              strafeDir: Math.random() < 0.5 ? -1 : 1,
+              targetPoint: null,
+              spottedTargetId: null,
+              spottedSince: 0,
+              staggerOffsetMs,
+              nextVisionCheckAt: staggerOffsetMs,
+              cachedTargetId: null,
+              nextBurstAllowedAt: 0,
+              stuckRefX: 0,
+              stuckRefZ: 0,
+              stuckTimer: 0,
+              evadeUntil: 0,
+              evadeYaw: 0,
+              slideUntil: 0,
+              nextSlideAllowedAt: 0
+            };
+          })()
         : null
     };
   }
@@ -203,7 +212,12 @@ export class GameRoom {
       }
     }
 
-    const allParticipants = Array.from(this.players.values());
+    const allParticipants = this._participantsBuf;
+    let partCount = 0;
+    for (const p of this.players.values()) {
+      allParticipants[partCount++] = p;
+    }
+    allParticipants.length = partCount;
 
     for (const p of allParticipants) {
       if (!p.alive || p.spectating) continue;

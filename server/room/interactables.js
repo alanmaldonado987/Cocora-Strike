@@ -2,7 +2,48 @@
 // Puertas y ventanas del mapa: estado, interacción, daño y serialización.
 // Métodos mezclados en GameRoom.prototype (usan `this` como la sala).
 
+import { BOT_AI_CONFIG } from '../../shared/mapData.js';
+
+const _doorSpatialQueryBuf = [];
+
 export const interactablesMethods = {
+  /**
+   * Abre puertas cerradas cercanas a una entidad consultando únicamente la grilla espacial
+   * (filtrando colisionadores con tag === 'door') en lugar de iterar todas las puertas del mapa.
+   */
+  openNearbyClosedDoorsForEntity(
+    entity,
+    horizRadius = BOT_AI_CONFIG.doorSenseRadius,
+    vertLimit = BOT_AI_CONFIG.doorSenseVertical
+  ) {
+    if (!this.map?.colliders) return 0;
+    const nearby = this.map.colliders.queryNear(entity.x, entity.z, horizRadius, _doorSpatialQueryBuf);
+    let opened = 0;
+    for (let i = 0; i < nearby.length; i++) {
+      const col = nearby[i];
+      if (col.tag !== 'door' || col.enabled === false) continue;
+      const doorId = col.meta?.doorId;
+      if (!doorId) continue;
+      const door = this.doorsById.get(doorId);
+      if (!door || door.destroyed || door.isOpen) continue;
+      if (Math.hypot(door.x - entity.x, door.z - entity.z) < horizRadius && Math.abs(door.y - entity.y) < vertLimit) {
+        door.isOpen = true;
+        if (door.collider) door.collider.enabled = false;
+        opened++;
+        this.io.emit('door_state_changed', {
+          doorId: door.id,
+          isOpen: true,
+          hp: door.hp,
+          destroyed: false,
+          x: door.x,
+          y: door.y,
+          z: door.z
+        });
+      }
+    }
+    return opened;
+  },
+
   syncMapInteractiveIndex() {
     this.doorsById.clear();
     this.windowsById.clear();

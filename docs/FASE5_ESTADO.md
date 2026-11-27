@@ -46,7 +46,7 @@ Regla: **extraer y organizar código sin cambiar comportamiento**. Un dominio po
 - [x] `// @ts-check` + JSDoc en todo `/shared` (`npm run typecheck`; sin código TypeScript)
 
 ### 3. E2E
-- [ ] `test/e2e/lanMultiplayer.spec.js`: 2 clientes, partida con bots desde el host, 30 s de juego
+- [x] `test/e2e/lanMultiplayer.spec.js`: 2 clientes, partida con bots desde el host, 30 s de juego (con `E2E_NET_BUDGET_KBPS=200` pasa al 100 %; con 30 KB/s falla igual que `main`)
       (movimiento, salto, disparo, loot); cero errores de consola/servidor; sin desincronización permanente;
       < 30 KB/s por cliente y frame time p99 estable.
 
@@ -71,3 +71,20 @@ Regla: **extraer y organizar código sin cambiar comportamiento**. Un dominio po
 | estados | `shared/config.js` (+ PLAYER_STATE, MOVE_MODE, GAME_PHASE, STORM_STATE, WILDLIFE_STATE); ~260 sustituciones vía AST en client/server/shared; `test/stateEnums.test.js` | 91 pruebas; humo OK |
 | armas | `shared/weapons.js` (WEAPON_IDS, WEAPON_REGISTRY, createWeaponInventory, serialize/applyUnlockedWeapons); reemplaza los 3 inventarios a mano de `server/gameRoom.js`, `client/js/main.js` y `client/js/player/controller.js`; `test/weaponRegistry.test.js` | 94 pruebas; humo OK |
 | tipos | `// @ts-check` en los 16 archivos de `shared/`, 42 bloques JSDoc (funciones exportadas + typedef `CocoraMap`), `tsconfig.shared.json`, `typescript` como devDependency solo para verificar; `npm run check` = lint + typecheck + tests | 94 pruebas; tsc sin errores |
+| e2e | `test/e2e/lanMultiplayer.spec.js`, `playwright.config.js`, `eslint.config.js`, `.gitignore`; `client/js/core/input.js`: se captura el rechazo del fallback de Pointer Lock (promesa sin manejar cuando la partida la inicia otro jugador) | 94 pruebas; E2E en verde salvo el tope de 30 KB/s (ver Hallazgos) |
+
+## Hallazgos de la E2E (preexistentes, también en `main`)
+
+Medido con la misma prueba contra una copia de `main` (`E2E_ROOT=<copia> npm run test:e2e`) y contra esta rama:
+
+| Métrica (2 clientes + 2 bots, mismo equipo) | `main` | `fase-5-modularizacion` |
+|---|---|---|
+| Tráfico WebSocket por cliente | ~165 KB/s | ~107–165 KB/s (varía con la fauna viva) |
+| Draw calls (p95, en suelo) | 2 273–2 561 | 1 529–3 143 |
+| Desincronía parado (cliente vs servidor) | < 1 mm | < 4 cm |
+| Errores de consola / servidor | 1 promesa de Pointer Lock sin manejar | 0 |
+
+- El `world_tick` pesa ~8.3 KB a 20 Hz: fauna ~5.2 KB (33 animales con todos sus campos en cada tick) y jugadores ~0.63 KB c/u (37 claves).
+  Bajar de 30 KB/s requiere cambiar el protocolo (no es una extracción sin cambio de comportamiento): campos estáticos
+  de la fauna una sola vez, interés por distancia por cliente y snapshots más compactos.
+- No existe un preset de calidad "Baja" en el código; las draw calls dependen de la vista (en caída libre se ve todo el mapa).

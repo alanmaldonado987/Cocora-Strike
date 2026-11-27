@@ -84,7 +84,10 @@ async function openClient(browser, port, name) {
       const me = c.net.lastWorldTick?.players?.[c.net.selfId];
       if (me) e2e.lastMe = { x: me.x, y: me.y, z: me.z, state: me.state, t: performance.now() };
     });
-    c.net.socket.on('loot_picked', (d) => { if (d.playerId === c.net.selfId) e2e.pickups++; });
+    c.net.socket.on('loot_picked', (d) => {
+      if (d.playerId === c.net.selfId) e2e.pickups++;
+      (e2e.pickLog ||= []).push(d.playerId === c.net.selfId ? 'yo' : d.playerId);
+    });
     c.net.socket.on('shot_fired', (d) => { if (d.shooterId === c.net.selfId) e2e.shots++; });
     let last = performance.now();
     const tick = (now) => {
@@ -143,17 +146,18 @@ async function settledSyncError(page) {
   return err;
 }
 
-// Orienta la vista hacia el botín más cercano (los puños recogen al pasar por encima)
-// Orienta la vista hacia el botín alcanzable más cercano (los puños recogen al pasar por encima). Si un objetivo
-// no se acerca en ~2 s (dentro de un edificio cerrado, tras un barranco…) se descarta y se elige el siguiente.
-// `lane` (0/1) reparte el botín entre los dos clientes por paridad del id: aterrizan juntos y, si persiguen el
-// mismo objeto, el que llega segundo se queda sin nada.
+// Orienta la vista hacia el botín alcanzable más cercano que nadie más tenga más cerca (los bots también lo
+// buscan). Con los puños equipados cualquier botín se recoge automáticamente al pasar por encima.
+// - `lane` (0/1) reparte el botín entre los dos clientes por paridad del id: aterrizan juntos y, si persiguen el
+//   mismo objeto, el que llega segundo se queda sin nada.
+// - Si un objetivo no se acerca en ~2 s (edificio cerrado, barranco…) se descarta y se elige el siguiente.
 const aimAtNearestLoot = (page, lane) =>
   page.evaluate((laneInPage) => {
     const c = window.__cocoro;
     const p = c.localPlayer;
     const e2e = window.__e2e;
     e2e.skipLoot ??= new Set();
+    const others = [...c.net.getRemoteEntityList()].map((e) => ({ x: e.x, z: e.z }));
     let best = null;
     let bestD = Infinity;
     for (const pass of [true, false]) {
@@ -161,7 +165,8 @@ const aimAtNearestLoot = (page, lane) =>
         if (e2e.skipLoot.has(item.id)) continue;
         if (pass && (parseInt(String(item.id).replace(/\D/g, ''), 10) || 0) % 2 !== laneInPage) continue;
         const d = Math.hypot(item.x - p.x, item.z - p.z);
-        if (d < bestD) { bestD = d; best = item; }
+        const contested = others.some((o) => Math.hypot(item.x - o.x, item.z - o.z) < d - 2);
+        if (!contested && d < bestD) { bestD = d; best = item; }
       }
       if (best && bestD < 60) break; // en la pasada libre se acepta cualquier objeto
     }
@@ -178,7 +183,9 @@ const aimAtNearestLoot = (page, lane) =>
     }
     // W avanza en (sin(yaw), cos(yaw)): ver client/js/player/controller.js
     p.yaw = Math.atan2(best.x - p.x, best.z - p.z);
-    p.pitch = -0.1;
+    // Mirar al objeto: así el sensor [E] del HUD lo detecta si está a alcance manual (3.6 m)
+    const eyeY = p.y + 1.64;
+    p.pitch = Math.max(-1.2, Math.min(0.4, Math.atan2(best.y + 0.16 - eyeY, Math.max(0.3, bestD))));
     return bestD;
   }, lane);
 
@@ -221,6 +228,7 @@ test('LAN: 2 clientes + bots, 30 s de juego sin errores, sincronizados y dentro 
           // Fase botín: caminar/correr hacia el botín más cercano; E lo recoge a <= 3.6 m (los puños además lo
           // recogen solos al pasar por encima) y un salto supera el obstáculo si el avance se atasca
           const d = await aimAtNearestLoot(c.page, idx % 2);
+          if (process.env.E2E_DEBUG) console.log(c.name, 'botín a', d?.toFixed(1), JSON.stringify(await c.page.evaluate(() => { const p = window.__cocoro.localPlayer; return { x: +p.x.toFixed(1), z: +p.z.toFixed(1), yaw: +p.yaw.toFixed(2), st: p.state, mm: p.moveMode }; })));
           await c.page.keyboard.down('KeyW');
           if (d !== null && d > 8) await c.page.keyboard.down('ShiftLeft');
           else await c.page.keyboard.up('ShiftLeft');
@@ -274,6 +282,7 @@ test('LAN: 2 clientes + bots, 30 s de juego sin errores, sincronizados y dentro 
           drawCallsMax: dc[dc.length - 1] || 0,
           pickups: window.__e2e.pickups,
           lootSkipped: window.__e2e.skipLoot?.size ?? 0,
+          pickLog: (window.__e2e.pickLog || []).slice(0, 12),
           shots: window.__e2e.shots,
           state: window.__cocoro.localPlayer.state,
           alive: window.__cocoro.localPlayer.alive,

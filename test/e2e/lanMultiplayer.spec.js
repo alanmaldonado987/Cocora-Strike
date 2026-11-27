@@ -79,7 +79,10 @@ async function openClient(browser, port, name) {
       const me = s.players?.[c.net.selfId];
       if (me) e2e.lastMe = { x: me.x, y: me.y, z: me.z, state: me.state, t: performance.now() };
     });
-    c.net.socket.on('loot_picked', (d) => { if (d.playerId === c.net.selfId) e2e.pickups++; });
+    c.net.socket.on('loot_picked', (d) => {
+      if (d.playerId === c.net.selfId) e2e.pickups++;
+      (e2e.pickLog ||= []).push(d.playerId === c.net.selfId ? 'yo' : d.playerId);
+    });
     c.net.socket.on('shot_fired', (d) => { if (d.shooterId === c.net.selfId) e2e.shots++; });
     let last = performance.now();
     const tick = (now) => {
@@ -138,20 +141,26 @@ async function settledSyncError(page) {
   return err;
 }
 
-// Orienta la vista hacia el botín más cercano (los puños recogen al pasar por encima)
+// Orienta la vista hacia el botín más cercano que nadie más tenga más cerca (los bots también lo buscan).
+// Con los puños equipados cualquier botín se recoge automáticamente al pasar por encima.
 const aimAtNearestLoot = (page) =>
   page.evaluate(() => {
     const c = window.__cocoro;
     const p = c.localPlayer;
+    const others = [...c.net.getRemoteEntityList()].map((e) => ({ x: e.x, z: e.z }));
     let best = null;
     let bestD = Infinity;
     for (const item of c.world.lootItemsData.values()) {
       const d = Math.hypot(item.x - p.x, item.z - p.z);
-      if (d < bestD) { bestD = d; best = item; }
+      const contested = others.some((o) => Math.hypot(item.x - o.x, item.z - o.z) < d - 2);
+      if (!contested && d < bestD) { bestD = d; best = item; }
     }
     if (!best) return null;
-    p.yaw = Math.atan2(-(best.x - p.x), -(best.z - p.z));
-    p.pitch = -0.1;
+    // W avanza en (sin(yaw), cos(yaw)): ver client/js/player/controller.js
+    p.yaw = Math.atan2(best.x - p.x, best.z - p.z);
+    // Mirar al objeto: así el sensor [E] del HUD lo detecta si está a alcance manual (3.6 m)
+    const eyeY = p.y + 1.64;
+    p.pitch = Math.max(-1.2, Math.min(0.4, Math.atan2(best.y + 0.16 - eyeY, Math.max(0.3, bestD))));
     return bestD;
   });
 
@@ -187,16 +196,13 @@ test('LAN: 2 clientes + bots, 30 s de juego sin errores, sincronizados y dentro 
     const t0 = Date.now();
     const movingErrors = clients.map(() => []);
     const playOne = async (c, idx) => {
-      let lastLootD = Infinity;
-      let flip = false;
       while (Date.now() - t0 < ACTIVE_PLAY_MS) {
         const elapsed = Date.now() - t0;
         if (elapsed < ACTIVE_PLAY_MS * 0.55) {
           // Fase botín: caminar/correr hacia el botín más cercano
           const d = await aimAtNearestLoot(c.page);
-          if (d !== null && d > lastLootD + 0.5) flip = !flip;
-          if (flip) await c.page.evaluate(() => { window.__cocoro.localPlayer.yaw += Math.PI; });
-          lastLootD = d ?? Infinity;
+          if (process.env.E2E_DEBUG) console.log(c.name, 'botín a', d?.toFixed(1), JSON.stringify(await c.page.evaluate(() => { const p = window.__cocoro.localPlayer; return { x: +p.x.toFixed(1), z: +p.z.toFixed(1), yaw: +p.yaw.toFixed(2), st: p.state, mm: p.moveMode }; })));
+          if (d !== null && d < 3.4) await c.page.keyboard.press('KeyE');
           await c.page.keyboard.down('KeyW');
           if (d !== null && d > 8) await c.page.keyboard.down('ShiftLeft');
           else await c.page.keyboard.up('ShiftLeft');
@@ -246,6 +252,7 @@ test('LAN: 2 clientes + bots, 30 s de juego sin errores, sincronizados y dentro 
           drawCallsP95: dc[Math.floor(dc.length * 0.95)] || 0,
           drawCallsMax: dc[dc.length - 1] || 0,
           pickups: window.__e2e.pickups,
+          pickLog: (window.__e2e.pickLog || []).slice(0, 12),
           shots: window.__e2e.shots,
           state: window.__cocoro.localPlayer.state,
           alive: window.__cocoro.localPlayer.alive,

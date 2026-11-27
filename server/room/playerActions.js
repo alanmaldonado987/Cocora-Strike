@@ -6,6 +6,7 @@ import {
   WORLD_HALF,
   WATER_LEVEL,
   SWIM_CONFIG,
+  SIM_DT,
   PLAYER_RADIUS,
   PLAYER_HEIGHT,
   PLAYER_CROUCH_HEIGHT,
@@ -22,9 +23,13 @@ import {
   resolveSlidingHorizontal,
   getWaterDepthAt,
   getSwimFloatY,
-  isSwimmingAt
+  isSwimmingAt,
+  createStepEvents,
+  stepPlayer
 } from '../../shared/mapData.js';
 import { consumeMoveBudget } from '../validation.js';
+
+const _serverStepEvents = createStepEvents();
 
 export const playerActionsMethods = {
   handlePlayerJump(socketId) {
@@ -79,7 +84,12 @@ export const playerActionsMethods = {
     p.z = this.plane.z + backZ + (Math.random() - 0.5) * 0.5;
     const groundAtDrop = this.map.getFloorBelowY(p.x, p.y, p.z);
     p.jumpAltitude = Math.max(15, p.y - groundAtDrop);
+    p.jumpStartAltitude = p.jumpAltitude;
+    p.currentDescentSpeed = PARACHUTE_CONFIG.freefallInitialSpeed;
+    p.airMomentumX = (this.plane.vx || 0) * 0.42;
+    p.airMomentumZ = (this.plane.vz || 0) * 0.42;
     p.fallPeakY = p.y;
+    p.airPeakY = p.y;
     p.vy = -PARACHUTE_CONFIG.freefallInitialSpeed;
     this.io.emit('player_jumped', {
       playerId: p.id,
@@ -124,6 +134,46 @@ export const playerActionsMethods = {
       p.pitch = Math.max(-1.45, Math.min(1.45, data.pitch));
     }
     if (p.state === 'plane') return;
+
+    // Simulación cinemática compartida paso a paso (stepPlayer idéntico en cliente y servidor)
+    if (Array.isArray(data.steps) && data.steps.length > 0) {
+      const now = Date.now();
+      for (let i = 0; i < data.steps.length; i++) {
+        const cmd = data.steps[i];
+        if (!p.alive || p.state === 'plane') break;
+        if (cmd.seq <= (p.lastProcessedSeq || 0)) continue;
+        p.lastProcessedSeq = cmd.seq;
+        p.isHealing = p.healingUntil > now;
+
+        const ev = stepPlayer(p, cmd, SIM_DT, this.map, {
+          reloading: p.reloadingUntil > now,
+          eventsOut: _serverStepEvents
+        });
+        p.animWalk = p.walkPhase || 0;
+        p.fallPeakY = p.airPeakY ?? p.y;
+
+        if (ev.cancelHeal && p.healingUntil > 0) {
+          this.cancelHealForPlayer(p);
+        }
+        if (ev.slideStarted) {
+          this.io.emit('player_slid', { playerId: p.id, x: p.x, y: p.y, z: p.z, yaw: p.yaw });
+        }
+        if (ev.parachuteOpened) {
+          this.io.emit('player_jumped', { playerId: p.id, state: 'parachuting' });
+        }
+        if (ev.vaultBreakWindowId) {
+          this.handleBreakWindow(socketId, ev.vaultBreakWindowId);
+        }
+        if (ev.landed && !ev.fromParachute && ev.fallDistance > 0 && !ev.landedInDeepWater) {
+          const fallDmg =
+            ev.waterDepth > SWIM_CONFIG.swimDepth
+              ? 0
+              : computeFallDamage(ev.waterDepth > 0.45 ? ev.fallDistance * 0.5 : ev.fallDistance);
+          if (fallDmg > 0) this.damagePlayer(p, fallDmg, null, 'fall', false);
+        }
+      }
+      return;
+    }
 
     if (typeof data.animWalk === 'number' && Number.isFinite(data.animWalk)) p.animWalk = data.animWalk;
     if (typeof data.moveMode === 'string') p.moveMode = data.moveMode;

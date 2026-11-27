@@ -9,27 +9,20 @@ import * as THREE from 'three';
 import {
   WEAPONS,
   WEAPON_SLOTS,
-  SLIDE_CONFIG,
   HEAL_CONFIG,
   PARACHUTE_CONFIG,
   CABIN_DISEMBARK_MS,
+  SIM_DT,
+  PLAYER_INPUT_BUTTONS,
   PLAYER_RADIUS,
-  PLAYER_HEIGHT,
-  PLAYER_CROUCH_HEIGHT,
-  PLAYER_SLIDE_HEIGHT,
   PLAYER_EYE_HEIGHT,
   PLAYER_CROUCH_EYE_HEIGHT,
   PLAYER_SLIDE_EYE_HEIGHT,
-  WATER_LEVEL,
   SWIM_CONFIG,
-  computeTargetDescentSpeed,
   applyEntitySeparation,
-  stepCharacterPhysics,
-  findVaultableObstacle,
   raycastVoxels,
-  getWaterDepthAt,
-  isSwimmingAt,
-  getSwimFloatY
+  createStepEvents,
+  stepPlayer
 } from '/shared/mapData.js';
 import {
   buildExternalCharacterRig,
@@ -1285,6 +1278,8 @@ export class LocalPlayerController {
     this.x = 0;
     this.y = 30;
     this.z = 0;
+    this.vx = 0;
+    this.vz = 0;
     this.vy = 0;
     this.yaw = 0;
     this.pitch = -0.1;
@@ -1292,6 +1287,18 @@ export class LocalPlayerController {
     this.walkPhase = 0;
     this.stepAccum = 0;
     this.moveMode = 'idle';
+
+    this.simAccum = 0;
+    this.inputSeq = 0;
+    this.queuedButtonsMask = 0;
+    this.pendingNetSteps = [];
+    this.unackedSteps = [];
+    this.reconcileOffsetX = 0;
+    this.reconcileOffsetY = 0;
+    this.reconcileOffsetZ = 0;
+    this._stepEvents = createStepEvents();
+    this._reconcileEvents = createStepEvents();
+    this._reconcileProbe = {};
 
     this.airMomentumX = 0;
     this.airMomentumZ = 0;
@@ -1467,41 +1474,122 @@ export class LocalPlayerController {
     this.onCameraModeChanged?.(this.cameraMode);
   }
 
-  tryStartSlideOrCrouch(code) {
-    if (!this.alive || this.state !== 'ground' || !this.onGround || this.isSwimming) return;
-
-    const sprintingForward =
-      (this.keys['ShiftLeft'] || this.keys['ShiftRight']) &&
-      (this.keys['KeyW'] || this.keys['ArrowUp']);
-
-    if (sprintingForward && !this.isSliding) {
-      const nowSec = performance.now() / 1000;
-      if (nowSec >= this.slideCooldownUntil) {
-        this.isCrouching = false;
-        this.isSliding = true;
-        this.slideTimer = SLIDE_CONFIG.durationSec;
-        this.slideCooldownUntil = nowSec + SLIDE_CONFIG.cooldownSec;
-        this.slideSpeed = SLIDE_CONFIG.initialSpeed;
-        this.slideDirX = Math.sin(this.yaw);
-        this.slideDirZ = Math.cos(this.yaw);
-        this.slideDustAccum = 0;
-        this.audio.playSlide(0);
-        this.onSlideChange?.(true);
-        return;
-      }
-    }
-
-    // Si no está esprintando hacia adelante, 'C' alterna agacharse en modo sigilo (para ocultarse en arbustos altos)
-    if (code === 'KeyC' && !this.isSliding) {
-      this.isCrouching = !this.isCrouching;
-    }
-  }
-
   endSlide() {
     if (!this.isSliding) return;
     this.isSliding = false;
     this.slideTimer = 0;
     this.onSlideChange?.(false);
+  }
+
+  flushPendingNetworkSteps() {
+    if (this.pendingNetSteps.length === 0) return null;
+    const out = this.pendingNetSteps.slice(0, 12);
+    this.pendingNetSteps.splice(0, out.length);
+    return out;
+  }
+
+  resetPredictionBuffers() {
+    this.simAccum = 0;
+    this.queuedButtonsMask = 0;
+    this.pendingNetSteps.length = 0;
+    this.unackedSteps.length = 0;
+    this.reconcileOffsetX = 0;
+    this.reconcileOffsetY = 0;
+    this.reconcileOffsetZ = 0;
+    this.prevJumpHeld = false;
+    this.prevCrouchHeld = false;
+    this.prevSlideHeld = false;
+  }
+
+  reconcileWithServer(meSnapshot, mapData) {
+    if (!meSnapshot || !mapData || this.state === 'plane' || !this.alive) return;
+    const ackSeq = meSnapshot.lastSeq || 0;
+    if (ackSeq <= 0) return;
+
+    while (this.unackedSteps.length > 0 && this.unackedSteps[0].seq <= ackSeq) {
+      this.unackedSteps.shift();
+    }
+
+    const probe = this._reconcileProbe;
+    probe.x = meSnapshot.x;
+    probe.y = meSnapshot.y;
+    probe.z = meSnapshot.z;
+    probe.vx = meSnapshot.vx ?? this.vx;
+    probe.vz = meSnapshot.vz ?? this.vz;
+    probe.vy = meSnapshot.vy ?? this.vy;
+    probe.yaw = meSnapshot.yaw ?? this.yaw;
+    probe.pitch = meSnapshot.pitch ?? this.pitch;
+    probe.onGround = Boolean(meSnapshot.onGround);
+    probe.state = meSnapshot.state || this.state;
+    probe.moveMode = meSnapshot.moveMode || this.moveMode;
+    probe.walkPhase = meSnapshot.animWalk ?? this.walkPhase;
+    probe.isSliding = Boolean(meSnapshot.isSliding);
+    probe.isCrouching = Boolean(meSnapshot.isCrouching);
+    probe.isSwimming = Boolean(meSnapshot.isSwimming);
+    probe.isVaulting = this.isVaulting;
+    probe.isHealing = Boolean(meSnapshot.isHealing);
+    probe.equipped = meSnapshot.equipped || this.equipped;
+    probe.coyoteTimer = this.coyoteTimer || 0;
+    probe.jumpBufferTimer = this.jumpBufferTimer || 0;
+    probe.prevJumpHeld = false;
+    probe.prevCrouchHeld = false;
+    probe.prevSlideHeld = false;
+    probe.slideTimer = this.slideTimer || 0;
+    probe.slideCooldownTimer = this.slideCooldownTimer || 0;
+    probe.slideSpeed = this.slideSpeed || 0;
+    probe.slideDirX = this.slideDirX || 0;
+    probe.slideDirZ = this.slideDirZ || 1;
+    probe.vaultTimer = this.vaultTimer || 0;
+    probe.vaultDuration = this.vaultDuration || 0.42;
+    probe.vaultStartX = this.vaultStartX || 0;
+    probe.vaultStartY = this.vaultStartY || 0;
+    probe.vaultStartZ = this.vaultStartZ || 0;
+    probe.vaultEndX = this.vaultEndX || 0;
+    probe.vaultEndY = this.vaultEndY || 0;
+    probe.vaultEndZ = this.vaultEndZ || 0;
+    probe.vaultApexY = this.vaultApexY || 0;
+    probe.jumpStartAltitude = meSnapshot.jumpAltitude || this.jumpStartAltitude;
+    probe.currentDescentSpeed = this.currentDescentSpeed || 0;
+    probe.airMomentumX = this.airMomentumX || 0;
+    probe.airMomentumZ = this.airMomentumZ || 0;
+    probe.airPeakY = this.airPeakY || probe.y;
+    probe.currentGroundClearance = this.currentGroundClearance || 0;
+
+    for (let i = 0; i < this.unackedSteps.length; i++) {
+      stepPlayer(probe, this.unackedSteps[i], SIM_DT, mapData, {
+        reloading: this.reloading,
+        eventsOut: this._reconcileEvents
+      });
+    }
+
+    const errX = this.x - probe.x;
+    const errY = this.y - probe.y;
+    const errZ = this.z - probe.z;
+    const errDist = Math.hypot(errX, errY, errZ);
+    if (errDist < 0.015) return;
+
+    const prevRenderX = this.x + this.reconcileOffsetX;
+    const prevRenderY = this.y + this.reconcileOffsetY;
+    const prevRenderZ = this.z + this.reconcileOffsetZ;
+
+    this.x = probe.x;
+    this.y = probe.y;
+    this.z = probe.z;
+    this.vx = probe.vx;
+    this.vz = probe.vz;
+    this.vy = probe.vy;
+    this.onGround = probe.onGround;
+    this.state = probe.state;
+
+    if (errDist >= 2.0) {
+      this.reconcileOffsetX = 0;
+      this.reconcileOffsetY = 0;
+      this.reconcileOffsetZ = 0;
+    } else {
+      this.reconcileOffsetX = prevRenderX - this.x;
+      this.reconcileOffsetY = prevRenderY - this.y;
+      this.reconcileOffsetZ = prevRenderZ - this.z;
+    }
   }
 
   startCabinDisembarkSequence() {
@@ -1576,64 +1664,20 @@ export class LocalPlayerController {
       if (!this.alive) return;
 
       if (e.code === 'KeyC' || e.code === 'ControlLeft' || e.code === 'ControlRight') {
-        this.tryStartSlideOrCrouch(e.code);
+        if (e.code === 'KeyC') {
+          this.queuedButtonsMask |= PLAYER_INPUT_BUTTONS.CROUCH;
+        } else {
+          this.queuedButtonsMask |= PLAYER_INPUT_BUTTONS.SLIDE | PLAYER_INPUT_BUTTONS.CROUCH;
+        }
       }
 
       if (e.code === 'Space' || e.code === 'KeyF') {
         if (this.state === 'plane') {
           this.startCabinDisembarkSequence();
-        } else if (this.state === 'skydiving') {
-          if (this.currentGroundClearance >= PARACHUTE_CONFIG.minClearanceToOpen) {
-            this.state = 'parachuting';
-            this.audio.playParachuteOpen();
-            this.onJumpRequest?.();
-          }
-        } else if (this.state === 'ground') {
-          if (this.onGround && e.code === 'Space' && !this.isVaulting && !this.isSwimming) {
-            const pressingForward = Boolean(this.keys['KeyW'] || this.keys['ArrowUp']);
-            const vaultTarget = pressingForward
-              ? findVaultableObstacle(this.currentMap, this.x, this.y, this.z, this.yaw)
-              : null;
-            if (vaultTarget) {
-              this.endSlide();
-              this.isCrouching = false;
-              if (this.isHealing) this.cancelClientHeal(true);
-              this.isVaulting = true;
-              this.vaultTimer = 0;
-              this.vaultDuration = 0.42;
-              this.vaultStartX = this.x;
-              this.vaultStartY = this.y;
-              this.vaultStartZ = this.z;
-              this.vaultEndX = vaultTarget.endX;
-              this.vaultEndY = vaultTarget.endY;
-              this.vaultEndZ = vaultTarget.endZ;
-              this.vaultApexY = vaultTarget.apexY;
-              this.vy = 0;
-              this.onGround = false;
-              this.moveMode = 'vault';
-              this.audio.playVault?.();
-              if (vaultTarget.breakWindowId) {
-                this.onBreakWindowRequest?.(vaultTarget.breakWindowId);
-              }
-            } else {
-              this.endSlide();
-              this.isCrouching = false;
-              this.vy = 7.6;
-              this.onGround = false;
-              this.airPeakY = this.y;
-            }
-          } else if (
-            !this.onGround &&
-            this.currentGroundClearance >= PARACHUTE_CONFIG.minClearanceToOpen &&
-            this.airPeakY - (this.y - this.currentGroundClearance) >= PARACHUTE_CONFIG.minJumpHeightRef
-          ) {
-            const floorY = this.y - this.currentGroundClearance;
-            this.jumpStartAltitude = Math.max(PARACHUTE_CONFIG.minJumpHeightRef, this.airPeakY - floorY);
-            this.currentDescentSpeed = Math.max(4, -this.vy);
-            this.state = 'parachuting';
-            this.audio.playParachuteOpen();
-            this.onJumpRequest?.();
-          }
+        } else if (e.code === 'KeyF') {
+          this.queuedButtonsMask |= PLAYER_INPUT_BUTTONS.PARACHUTE;
+        } else {
+          this.queuedButtonsMask |= PLAYER_INPUT_BUTTONS.JUMP;
         }
       }
 
@@ -1893,278 +1937,130 @@ export class LocalPlayerController {
             this.avatar.animate(localPose.walkCycle, 'plane', this.equipped, 0, this.moveMode, dt, false, false);
           }
         }
-      } else if (this.state === 'skydiving' || this.state === 'parachuting') {
+      } else {
         this.ensureAvatarInWorldScene();
-        this.endSlide();
-        this.isCrouching = false;
-        const floorY = mapData.getFloorBelowY(this.x, this.y, this.z);
-        this.currentGroundClearance = Math.max(0, this.y - floorY);
+        this.simAccum = Math.min(0.12, this.simAccum + dt);
 
-        this.airMomentumX *= Math.exp(-1.9 * dt);
-        this.airMomentumZ *= Math.exp(-1.9 * dt);
+        while (this.simAccum >= SIM_DT) {
+          this.simAccum -= SIM_DT;
 
-        const hSpeed =
-          this.state === 'skydiving'
-            ? PARACHUTE_CONFIG.freefallHorizontalSpeed
-            : PARACHUTE_CONFIG.canopyHorizontalSpeed;
+          let buttons = this.queuedButtonsMask;
+          this.queuedButtonsMask = 0;
+          if (this.keys['Space']) buttons |= PLAYER_INPUT_BUTTONS.JUMP;
+          if (this.keys['KeyF']) buttons |= PLAYER_INPUT_BUTTONS.PARACHUTE;
+          if (this.keys['ShiftLeft'] || this.keys['ShiftRight']) buttons |= PLAYER_INPUT_BUTTONS.SPRINT;
+          if (this.keys['KeyC']) buttons |= PLAYER_INPUT_BUTTONS.CROUCH;
+          if (this.keys['ControlLeft'] || this.keys['ControlRight']) buttons |= PLAYER_INPUT_BUTTONS.SLIDE | PLAYER_INPUT_BUTTONS.CROUCH;
+          if (this.aimingZoom) buttons |= PLAYER_INPUT_BUTTONS.ADS;
 
-        const targetDescent = computeTargetDescentSpeed(
-          this.jumpStartAltitude,
-          this.state,
-          this.pitch,
-          PARACHUTE_CONFIG
-        );
+          const cmd = {
+            seq: ++this.inputSeq,
+            moveX: wishX,
+            moveZ: wishZ,
+            yaw: this.yaw,
+            pitch: this.pitch,
+            buttons,
+            equipped: this.equipped
+          };
 
-        if (this.state === 'parachuting' && this.currentDescentSpeed > targetDescent) {
-          this.currentDescentSpeed = Math.max(
-            targetDescent,
-            this.currentDescentSpeed - PARACHUTE_CONFIG.canopyOpenDecel * dt
-          );
-        } else if (this.currentDescentSpeed < targetDescent) {
-          const ratio = this.currentDescentSpeed / Math.max(1, targetDescent);
-          const aeroAccel = PARACHUTE_CONFIG.freefallGravityAccel * Math.max(0.25, 1 - ratio * ratio * 0.72);
-          this.currentDescentSpeed = Math.min(targetDescent, this.currentDescentSpeed + aeroAccel * dt);
-        } else {
-          this.currentDescentSpeed = damp(this.currentDescentSpeed, targetDescent, 5.0, dt);
-        }
+          const ev = stepPlayer(this, cmd, SIM_DT, mapData, {
+            reloading: this.reloading,
+            eventsOut: this._stepEvents
+          });
 
-        stepCharacterPhysics(
-          mapData,
-          this,
-          wishX * hSpeed + this.airMomentumX,
-          wishZ * hSpeed + this.airMomentumZ,
-          dt,
-          0
-        );
-        this.vy = -this.currentDescentSpeed;
-        this.y += this.vy * dt;
-
-        // Apertura automática calibrada a los 35 metros sobre el suelo (descenso total ~8s)
-        if (this.state === 'skydiving' && this.y - floorY <= PARACHUTE_CONFIG.autoDeployHeight) {
-          this.state = 'parachuting';
-          this.audio.playParachuteOpen();
-          this.onJumpRequest?.();
-        }
-
-        const updatedFloorY = mapData.getFloorBelowY(this.x, this.y + 0.7, this.z);
-        const splashWaterDepth = getWaterDepthAt(mapData, this.x, this.z);
-        if (splashWaterDepth > SWIM_CONFIG.swimDepth && this.y <= WATER_LEVEL + 0.20) {
-          // Aterrizaje directo en la laguna o río profundo: cero sacudida de impacto y transición limpia a nado
-          this.y = getSwimFloatY(mapData, this.x, this.z);
-          this.vy = 0;
-          this.currentDescentSpeed = 0;
-          this.airMomentumX = 0;
-          this.airMomentumZ = 0;
-          this.onGround = true;
-          this.isSwimming = true;
-          this.state = 'ground';
-          this.moveMode = 'swim_idle';
-          this.airPeakY = this.y;
-          this.audio.playSplash?.(1.2);
-          this.onSpawnWaterRipples?.(this.x, this.z, true, 1.35);
-        } else if (this.y <= updatedFloorY + 0.12) {
-          const impactSpeed = this.currentDescentSpeed;
-          this.y = updatedFloorY;
-          this.vy = 0;
-          this.currentDescentSpeed = 0;
-          this.airMomentumX = 0;
-          this.airMomentumZ = 0;
-          this.onGround = true;
-          this.state = 'ground';
-          this.airPeakY = updatedFloorY;
-          this.cameraLandingOffset = -0.14 * Math.min(2.0, impactSpeed / 12);
-          this.audio.playFootstep(false);
-          this.moveMode = 'fall';
-        } else {
-          this.moveMode = 'fall';
-        }
-      } else if (this.state === 'ground') {
-        const wasOnGround = this.onGround;
-        const preVy = this.vy;
-        const prevX = this.x;
-        const prevY = this.y;
-        const prevZ = this.z;
-
-        // Agua profunda (> 1.25m): estado swimming con flotabilidad en superficie, ondas por Object Pooling y salida suave
-        const swimmingNow = !this.isVaulting && isSwimmingAt(mapData, this.x, this.y, this.z);
-        if (swimmingNow) {
-          if (!this.isSwimming) {
-            this.isSwimming = true;
-            this.endSlide();
-            this.isCrouching = false;
-            if (this.isHealing) this.cancelClientHeal(true);
-            this.audio.playSplash?.(Math.min(1.4, 0.5 + Math.abs(preVy) / 12));
-            this.onSpawnWaterRipples?.(this.x, this.z, true, 1.15);
-          }
-          const swimSpeed = sprinting ? SWIM_CONFIG.swimSprintSpeed : SWIM_CONFIG.swimSpeed;
-          stepCharacterPhysics(mapData, this, wishX * swimSpeed, wishZ * swimSpeed, dt, 0, PLAYER_RADIUS, PLAYER_HEIGHT);
-          if (remoteEntities.length > 0) {
-            applyEntitySeparation(this, remoteEntities, PLAYER_RADIUS, dt, mapData);
-          }
-          const targetFloatY = getSwimFloatY(mapData, this.x, this.z);
-          this.y = damp(this.y, targetFloatY, 6, dt);
-          this.vy = 0;
-          this.onGround = true;
-          this.airPeakY = this.y;
-          this.currentGroundClearance = 0;
-
-          const moved = Math.hypot(this.x - prevX, this.z - prevZ);
-          movingHoriz = moved > 0.004;
-          if (movingHoriz) {
-            this.walkPhase += dt * (sprinting ? 7.5 : 5.2);
-            this.moveMode = sprinting ? 'swim_fast' : 'swim';
-            this.swimStrokeAccum += moved;
-            if (this.swimStrokeAccum >= 1.6) {
-              this.swimStrokeAccum = 0;
-              this.audio.playSwimStroke?.();
-            }
-          } else {
-            this.moveMode = 'swim_idle';
+          if (this.state === 'ground' && !this.isVaulting && remoteEntities.length > 0) {
+            applyEntitySeparation(this, remoteEntities, PLAYER_RADIUS, SIM_DT, mapData);
           }
 
-          this.swimRippleAccum = (this.swimRippleAccum || 0) + dt;
-          if (this.swimRippleAccum >= (movingHoriz ? 0.13 : 0.32)) {
-            this.swimRippleAccum = 0;
-            this.onSpawnWaterRipples?.(this.x, this.z, movingHoriz, sprinting ? 1.15 : 0.85);
-          }
-        } else if (this.isSwimming) {
-          this.isSwimming = false;
-          this.onSpawnWaterRipples?.(this.x, this.z, false, 0.65);
-        }
+          this.pendingNetSteps.push(cmd);
+          if (this.pendingNetSteps.length > 24) this.pendingNetSteps.shift();
+          this.unackedSteps.push(cmd);
+          if (this.unackedSteps.length > 120) this.unackedSteps.shift();
 
-        if (swimmingNow) {
-          // (todo el movimiento de nado ya se resolvió arriba)
-        } else if (this.isVaulting) {
-          this.vaultTimer += dt;
-          const vt = Math.min(1, this.vaultTimer / Math.max(0.1, this.vaultDuration));
-          const smoothT = vt * vt * (3 - 2 * vt);
-          this.x = this.vaultStartX + (this.vaultEndX - this.vaultStartX) * smoothT;
-          this.z = this.vaultStartZ + (this.vaultEndZ - this.vaultStartZ) * smoothT;
-          const baseLinearY = this.vaultStartY + (this.vaultEndY - this.vaultStartY) * smoothT;
-          const arcLift = Math.sin(vt * Math.PI) * Math.max(0.35, this.vaultApexY - baseLinearY);
-          this.y = baseLinearY + arcLift;
-          this.vy = 0;
-          this.moveMode = 'vault';
-          movingHoriz = true;
-          if (vt >= 1) {
-            this.isVaulting = false;
-            this.y = this.vaultEndY;
-            this.onGround = true;
-            this.airPeakY = this.y;
-            this.cameraLandingOffset = -0.06;
-            this.audio.playFootstep(false);
-          }
-        } else if (this.isSliding) {
-          this.slideTimer -= dt;
-          const aheadGround = mapData.getGroundHeightAt(
-            this.x + this.slideDirX * 1.4,
-            this.z + this.slideDirZ * 1.4,
-            this.y
-          );
-          const curGround = mapData.getGroundHeightAt(this.x, this.z, this.y);
-          const downhillSlope = (curGround - aheadGround) / 1.4;
-
-          if (downhillSlope > 0.08) {
-            this.slideSpeed = Math.min(16.5, this.slideSpeed + downhillSlope * SLIDE_CONFIG.downhillBoostFactor * dt);
-            if (downhillSlope > 0.22 && this.slideTimer > 0.05) {
-              this.slideTimer = Math.min(SLIDE_CONFIG.durationSec, this.slideTimer + dt * 0.35);
-            }
-          } else {
-            const uphillBrake = downhillSlope < -0.05 ? Math.abs(downhillSlope) * 12 : 0;
-            this.slideSpeed = Math.max(
-              SLIDE_CONFIG.minEndSpeed,
-              this.slideSpeed - (SLIDE_CONFIG.frictionDecay + uphillBrake) * dt
-            );
-          }
-
-          stepCharacterPhysics(
-            mapData,
-            this,
-            this.slideDirX * this.slideSpeed,
-            this.slideDirZ * this.slideSpeed,
-            dt,
-            22,
-            PLAYER_RADIUS,
-            PLAYER_SLIDE_HEIGHT
-          );
-
-          this.slideDustAccum += dt;
-          if (this.slideDustAccum >= 0.065) {
-            this.slideDustAccum = 0;
-            this.onSpawnSlideDust?.(this.x, this.y, this.z, Math.atan2(this.slideDirX, this.slideDirZ));
-          }
-
-          if (this.slideTimer <= 0 || !this.onGround) {
-            this.endSlide();
-          }
-          this.moveMode = 'slide';
-          movingHoriz = true;
-        } else {
-          if (this.isHealing && ((sprinting && wLen > 0) || !this.onGround)) {
+          if (ev.cancelHeal && this.isHealing) {
             this.cancelClientHeal(true);
           }
+          if (ev.parachuteOpened) {
+            this.audio.playParachuteOpen();
+            this.onJumpRequest?.();
+          }
+          if (ev.slideStarted) {
+            this.slideDustAccum = 0;
+            this.audio.playSlide(0);
+            this.onSlideChange?.(true);
+          }
+          if (ev.slideEnded) {
+            this.onSlideChange?.(false);
+          }
+          if (ev.vaultStarted) {
+            this.audio.playVault?.();
+            if (ev.vaultBreakWindowId) {
+              this.onBreakWindowRequest?.(ev.vaultBreakWindowId);
+            }
+          }
+          if (ev.enteredWater) {
+            this.audio.playSplash?.(Math.min(1.4, 0.5 + ev.landingImpactSpeed / 12));
+            this.onSpawnWaterRipples?.(this.x, this.z, true, 1.2);
+          } else if (ev.exitedWater) {
+            this.onSpawnWaterRipples?.(this.x, this.z, false, 0.65);
+          }
 
-          const wMoveMult = WEAPONS[this.equipped]?.moveSpeedMult || 1.0;
-          const healMult = this.isHealing ? HEAL_CONFIG.moveSpeedMult || 0.45 : 1.0;
-          const baseSpeed = this.isCrouching ? 3.4 : sprinting ? 8.2 : 5.5;
-          // Vadear: con el agua por encima de la rodilla se avanza más lento
-          const wading = this.y < WATER_LEVEL - 0.4 && getWaterDepthAt(mapData, this.x, this.z) > 0.45;
-          const wadeMult = wading ? SWIM_CONFIG.wadeSpeedMult : 1.0;
-          const speed = baseSpeed * wMoveMult * healMult * wadeMult;
-          const effH = this.isCrouching ? PLAYER_CROUCH_HEIGHT : PLAYER_HEIGHT;
+          if (ev.landed && !ev.landedInDeepWater) {
+            if (ev.landingImpactSpeed > 4.2) {
+              this.cameraLandingOffset = -0.14 * Math.min(2.0, ev.landingImpactSpeed / 11);
+              this.audio.playFootstep(false);
+            }
+          }
 
-          if (this.isHealing) {
-            this.healParticleAccum += dt;
+          if (this.isSwimming) {
+            if (ev.movedHorizDist > 0.004) {
+              this.swimStrokeAccum += ev.movedHorizDist;
+              if (this.swimStrokeAccum >= 1.6) {
+                this.swimStrokeAccum = 0;
+                this.audio.playSwimStroke?.();
+              }
+            }
+            this.swimRippleAccum = (this.swimRippleAccum || 0) + SIM_DT;
+            const swimMoving = this.moveMode === 'swim' || this.moveMode === 'swim_fast';
+            if (this.swimRippleAccum >= (swimMoving ? 0.13 : 0.32)) {
+              this.swimRippleAccum = 0;
+              this.onSpawnWaterRipples?.(this.x, this.z, swimMoving, sprinting ? 1.15 : 0.85);
+            }
+          } else if (this.isSliding) {
+            this.slideDustAccum += SIM_DT;
+            if (this.slideDustAccum >= 0.065) {
+              this.slideDustAccum = 0;
+              this.onSpawnSlideDust?.(this.x, this.y, this.z, Math.atan2(this.slideDirX, this.slideDirZ));
+            }
+          } else if (this.onGround && ev.movedHorizDist > 0.003) {
+            this.stepAccum += ev.movedHorizDist;
+            if (this.stepAccum >= 2.2) {
+              this.stepAccum = 0;
+              this.audio.playFootstep(mapData.isInWater(this.x, this.y, this.z));
+            }
+          }
+
+          if (this.isHealing && this.state === 'ground') {
+            this.healParticleAccum += SIM_DT;
             if (this.healParticleAccum >= 0.085) {
               this.healParticleAccum = 0;
               this.onSpawnHealParticles?.(this.x, this.y, this.z);
             }
           }
-
-          stepCharacterPhysics(mapData, this, wishX * speed, wishZ * speed, dt, 22, PLAYER_RADIUS, effH);
-
-          if (remoteEntities.length > 0) {
-            applyEntitySeparation(this, remoteEntities, PLAYER_RADIUS, dt, mapData);
-          }
-
-          const floorY = mapData.getFloorBelowY(this.x, this.y + 0.35, this.z);
-          this.currentGroundClearance = Math.max(0, this.y - floorY);
-
-          if (!this.onGround) {
-            if (wasOnGround) this.airPeakY = prevY;
-            else this.airPeakY = Math.max(this.airPeakY, this.y);
-            this.moveMode = this.vy > 0.6 ? 'jump' : 'fall';
-          } else {
-            if (!wasOnGround && preVy < -4.5) {
-              this.cameraLandingOffset = -0.12 * Math.min(1.8, Math.abs(preVy) / 10);
-              this.audio.playFootstep(false);
-            }
-            this.airPeakY = this.y;
-
-            const moved = Math.hypot(this.x - prevX, this.z - prevZ);
-            movingHoriz = moved > 0.008;
-            if (movingHoriz) {
-              this.walkPhase += dt * (sprinting ? 13 : this.isCrouching ? 7 : 9.5);
-              this.moveMode = sprinting ? 'sprint' : this.isCrouching ? 'crouch_walk' : 'walk';
-              this.stepAccum += moved;
-              if (this.stepAccum >= 2.2) {
-                this.stepAccum = 0;
-                this.audio.playFootstep(mapData.isInWater(this.x, this.y, this.z));
-              }
-            } else {
-              this.moveMode = this.isCrouching ? 'crouch_idle' : 'idle';
-            }
-          }
         }
+
+        movingHoriz = Math.hypot(this.vx, this.vz) > 0.25 || this.isSliding || this.isVaulting;
       }
 
-      if (this.state !== 'plane') {
-        const minG = mapData.getTerrainHeightAt
-          ? mapData.getTerrainHeightAt(this.x, this.z)
-          : mapData.getGroundHeightAt(this.x, this.z, this.y);
-        if (this.y < minG) this.y = minG;
-      }
+      const reconDecay = Math.exp(-20 * dt);
+      this.reconcileOffsetX *= reconDecay;
+      this.reconcileOffsetY *= reconDecay;
+      this.reconcileOffsetZ *= reconDecay;
     }
+
+    const renderX = this.x + this.reconcileOffsetX;
+    const renderY = this.y + this.reconcileOffsetY;
+    const renderZ = this.z + this.reconcileOffsetZ;
 
     const sniperAds = this.isSniperScoped();
     if (this.avatar && this.state !== 'plane') {
@@ -2181,7 +2077,7 @@ export class LocalPlayerController {
         if (showLocalBody) {
           this.avatar.setOpacity(adsAlpha, this.aimingZoom && this.smoothCamDist < 1.65);
         }
-        this.avatar.root.position.set(this.x, this.y, this.z);
+        this.avatar.root.position.set(renderX, renderY, renderZ);
         this.avatar.root.rotation.set(0, this.yaw, 0);
         this.avatar.setWeapon(this.equipped);
         this.avatar.animate(
@@ -2277,6 +2173,10 @@ export class LocalPlayerController {
 
     const wSpec = WEAPONS[this.equipped] || WEAPONS.fists;
 
+    const camX = this.x + (this.reconcileOffsetX || 0);
+    const camY = this.y + (this.reconcileOffsetY || 0);
+    const camZ = this.z + (this.reconcileOffsetZ || 0);
+
     if ((this.cameraMode === 'first' || sniperAds) && this.alive) {
       let targetFov = 78;
       if (this.state === 'skydiving') targetFov = 86 + Math.min(8, this.currentDescentSpeed * 0.18);
@@ -2298,9 +2198,9 @@ export class LocalPlayerController {
       }
 
       this.camera.position.set(
-        this.x + shakeX,
-        this.y + this.smoothEyeHeight + bobY + this.cameraLandingOffset + shakeY,
-        this.z
+        camX + shakeX,
+        camY + this.smoothEyeHeight + bobY + this.cameraLandingOffset + shakeY,
+        camZ
       );
       _camTarget.copy(this.camera.position).addScaledVector(_camLookDir, 35);
       this.camera.lookAt(_camTarget);
@@ -2330,9 +2230,9 @@ export class LocalPlayerController {
     this.smoothEyeHeight = damp(this.smoothEyeHeight, targetPivotH, 14, dt);
 
     _camPivot.set(
-      this.x + _camRightVec.x * shoulderOffset,
-      this.y + this.smoothEyeHeight + this.cameraLandingOffset,
-      this.z + _camRightVec.z * shoulderOffset
+      camX + _camRightVec.x * shoulderOffset,
+      camY + this.smoothEyeHeight + this.cameraLandingOffset,
+      camZ + _camRightVec.z * shoulderOffset
     );
 
     _camBackDir.copy(_camLookDir).negate();

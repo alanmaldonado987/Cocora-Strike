@@ -388,25 +388,18 @@ export class NetworkManager {
 
   sendPlayerState(localPlayer) {
     const now = performance.now();
-    if (now - this.lastSendTime < 45) return; // Sincronizado con 20 Hz del servidor
+    if (now - this.lastSendTime < 45) return; // Sincronizado con ~22 Hz de red
     this.lastSendTime = now;
 
     if (!localPlayer.active || !localPlayer.alive) return;
 
+    const steps = localPlayer.flushPendingNetworkSteps?.();
+    if (localPlayer.state !== 'plane' && (!steps || steps.length === 0)) return;
+
     this.socket.emit('player_input', {
-      x: localPlayer.x,
-      y: localPlayer.y,
-      z: localPlayer.z,
       yaw: localPlayer.yaw,
       pitch: localPlayer.pitch,
-      onGround: localPlayer.onGround,
-      state: localPlayer.state,
-      animWalk: localPlayer.walkPhase,
-      moveMode: localPlayer.moveMode,
-      isSliding: localPlayer.isSliding,
-      isCrouching: localPlayer.isCrouching,
-      isSwimming: Boolean(localPlayer.isSwimming),
-      isVaulting: Boolean(localPlayer.isVaulting)
+      steps: steps && steps.length > 0 ? steps : undefined
     });
   }
 

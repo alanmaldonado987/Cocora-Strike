@@ -753,6 +753,10 @@ const net = new NetworkManager(scene, {
     localPlayer.isSliding = false;
     localPlayer.isVaulting = false;
     localPlayer.isCrouching = false;
+    localPlayer.vx = 0;
+    localPlayer.vz = 0;
+    localPlayer.vy = 0;
+    localPlayer.resetPredictionBuffers?.();
     localPlayer.planeViewMode = 'cabin_third';
     localPlayer.cameraMode = 'third';
     localPlayer.spawnAvatar(
@@ -860,7 +864,10 @@ const net = new NetworkManager(scene, {
       }
 
       if (localPlayer.state === 'plane' && me.state !== 'plane') {
+        localPlayer.resetPredictionBuffers?.();
         localPlayer.forceSyncExitFromServer(me);
+      } else if (localPlayer.state !== 'plane' && me.state !== 'plane') {
+        localPlayer.reconcileWithServer?.(me, currentMap);
       }
     }
   },

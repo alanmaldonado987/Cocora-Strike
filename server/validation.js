@@ -68,6 +68,26 @@ export const sanitizers = {
 
   player_input: (p) => {
     if (!isObject(p)) return null;
+    let steps;
+    if (Array.isArray(p.steps) && p.steps.length > 0 && p.steps.length <= 12) {
+      const cleanSteps = [];
+      for (let i = 0; i < p.steps.length; i++) {
+        const s = p.steps[i];
+        if (!isObject(s)) continue;
+        const seq = typeof s.seq === 'number' && Number.isInteger(s.seq) && s.seq > 0 ? s.seq : null;
+        if (seq === null) continue;
+        cleanSteps.push({
+          seq,
+          moveX: finite(s.moveX) ? clamp(s.moveX, -1.5, 1.5) : 0,
+          moveZ: finite(s.moveZ) ? clamp(s.moveZ, -1.5, 1.5) : 0,
+          yaw: finite(s.yaw) && Math.abs(s.yaw) <= MAX_COORD ? s.yaw : 0,
+          pitch: finite(s.pitch) ? clamp(s.pitch, -1.45, 1.45) : 0,
+          buttons: typeof s.buttons === 'number' && Number.isFinite(s.buttons) ? (s.buttons >>> 0) & 0xff : 0
+        });
+      }
+      if (cleanSteps.length > 0) steps = cleanSteps;
+    }
+
     const out = {
       x: optionalFinite(p.x),
       y: optionalFinite(p.y),
@@ -82,7 +102,8 @@ export const sanitizers = {
       isSwimming: optionalBool(p.isSwimming),
       // Modos como 'crouch_walk', 'swimming' o 'swim_idle' llevan guion bajo
       moveMode: typeof p.moveMode === 'string' && /^[a-z_]{1,16}$/.test(p.moveMode) ? p.moveMode : undefined,
-      state: typeof p.state === 'string' && INPUT_STATES.has(p.state) ? p.state : undefined
+      state: typeof p.state === 'string' && INPUT_STATES.has(p.state) ? p.state : undefined,
+      steps
     };
     // La posición solo cuenta si llega completa
     if (out.x === undefined || out.y === undefined || out.z === undefined) {

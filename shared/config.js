@@ -303,6 +303,95 @@ export const SLIDE_CONFIG = {
   downhillBoostFactor: 12.0
 };
 
+// Paso fijo compartido (60 Hz) y bitmask de botones para simulación determinista cliente/servidor
+export const SIM_TICK_RATE = 60;
+export const SIM_DT = 1 / SIM_TICK_RATE;
+
+export const PLAYER_INPUT_BUTTONS = {
+  JUMP: 1 << 0,
+  SPRINT: 1 << 1,
+  CROUCH: 1 << 2,
+  SLIDE: 1 << 3,
+  ADS: 1 << 4,
+  PARACHUTE: 1 << 5
+};
+
+// ==================== FASE 2: CINEMÁTICA Y SENSACIÓN DE MOVIMIENTO (GAME FEEL) ====================
+
+export const MOVEMENT_CONFIG = {
+  // Velocidades objetivo base en suelo (m/s) — idénticas al balance original
+  walkSpeed: 5.5,
+  sprintSpeed: 8.2,
+  crouchSpeed: 3.4,
+  jumpVelocity: 7.6,
+  gravity: 22.0,
+
+  // Aceleración y fricción progresivas (suelo y aire)
+  groundAccel: 76.0,          // m/s²: respuesta ágil alcanzando tope exacto sin tirón instantáneo
+  groundFriction: 8.5,        // 1/s: desaceleración limpia al soltar teclas o cambiar dirección
+  stopSpeed: 1.4,             // m/s: umbral bajo el cual la fricción detiene por completo
+  airAccel: 18.0,             // m/s²: control aéreo limitado conservando el impulso horizontal
+  airFriction: 0.35,          // 1/s: arrastre horizontal mínimo en el aire
+  maxAirWishSpeed: 6.2,       // m/s: tope de velocidad alcanzable solo por redirección aérea
+
+  // Asistencias de salto deterministas
+  coyoteTimeSec: 0.10,        // 100 ms de margen para saltar tras abandonar un borde
+  jumpBufferTimeSec: 0.12,    // 120 ms de memoria de salto si se pulsa antes de aterrizar
+
+  // Escalones y adhesión a pendientes / escaleras
+  maxStepHeight: 0.45,        // m: altura máxima de escalón que se sube automáticamente
+  stepMinHorizSpeed: 0.15,    // m/s: velocidad horizontal mínima para evaluar subida de escalón
+  groundSnapDist: 0.50,       // m: distancia vertical máxima de adhesión al bajar pendientes/escaleras
+  maxWalkableSlope: 1.75      // pendiente máxima caminable antes de bloquear subida
+};
+
+export const SLIDE_FEEL_CONFIG = {
+  minEntrySpeed: 6.5,         // m/s mínimos en carrera para iniciar deslizamiento
+  impulseBonus: 4.4,          // m/s de impulso adicional sobre la carrera (hasta initialSpeed)
+  maxDownhillSpeed: 16.5,     // m/s máximos deslizándose cuesta abajo
+  flatFriction: 7.5,          // m/s² de desaceleración en terreno plano
+  uphillBrakeFactor: 13.0,    // frenado adicional proporcional a pendiente en subida
+  downhillAccelFactor: 12.5,  // aceleración adicional proporcional a pendiente en bajada
+  exitToCrouchSpeed: 4.2      // m/s: al caer bajo este umbral pasa suavemente a estado agachado
+};
+
+export const CAMERA_FEEL_CONFIG = {
+  // Resorte críticamente amortiguado (frecuencia angular natural ω en rad/s)
+  followSpringOmega: 20.0,    // seguimiento de posición de cámara en 3ra persona
+  pivotSpringOmega: 18.0,     // transición de altura de ojos/pivote (de pie <-> agachado <-> slide)
+  distPullInOmega: 32.0,      // acercamiento rápido ante oclusión de geometría
+  distRecoverOmega: 12.0,     // retorno suave de distancia al despejarse el obstáculo
+  fovSpringOmega: 14.0,       // suavizado de apertura/cierre de FOV
+
+  // Sensación de impacto, sprint y head bob
+  baseThirdFov: 70.0,
+  baseFirstFov: 78.0,
+  sprintFovBoostDeg: 4.5,     // apertura progresiva (+4.5°, rango +3°..+5°) al esprintar
+  landingDipPerMps: 0.022,    // m de compresión de cámara por cada m/s de velocidad vertical de impacto
+  landingMaxDip: 0.28,        // m máximos de compresión al aterrizar
+  landingSpringOmega: 16.0,   // resorte de recuperación tras impacto contra el suelo
+
+  headBobEnabled: true,       // flag configurable para activar/desactivar balanceo de cabeza
+  headBobFirstAmpY: 0.024,
+  headBobFirstAmpX: 0.012,
+  headBobThirdAmpY: 0.014,
+  headBobSprintMult: 1.45
+};
+
+export const WEAPON_FEEL_CONFIG = {
+  recoilKickOmega: 34.0,      // rapidez del golpe inicial del retroceso visual
+  recoilReturnOmega: 13.5,    // resorte de retorno suave hacia el centro tras disparar
+  recoilVisualMult: 1.15,     // escala visual del recoil respecto a WEAPONS[id].recoil
+  recoilHorizontalJitter: 0.28 // fracción lateral sutil respecto al retroceso vertical
+};
+
+export const ANIMATION_FEEL_CONFIG = {
+  poseBlendRate: 12.0,        // velocidad de mezcla de pesos entre idle/walk/sprint/crouch/slide/air
+  remoteAnimLeadSec: 0.045,   // 45 ms de adelanto de fase de animación en remotos según velocidad
+  minMoveSpeedForWalk: 0.25,  // m/s para activar peso de caminata
+  sprintWeightThreshold: 6.6  // m/s a partir de los cuales pondera hacia pose de sprint
+};
+
 // Aeronaves de desembarco ("Aviones v1") y duración de secuencia animada en bodega (sit -> stand -> walk_cabin -> ramp_jump)
 export const TRANSPORT_AIRCRAFT_TYPES = ['auto', 'ac130', 'ch47'];
 export const CABIN_DISEMBARK_MS = 1400;

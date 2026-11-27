@@ -16,6 +16,7 @@ import {
   MOVEMENT_CONFIG,
   CAMERA_FEEL_CONFIG,
   WEAPON_FEEL_CONFIG,
+  ANIMATION_FEEL_CONFIG,
   PLAYER_INPUT_BUTTONS,
   PLAYER_RADIUS,
   PLAYER_EYE_HEIGHT,
@@ -26,6 +27,8 @@ import {
   stepCriticallyDampedSpring3D,
   stepFireAccumulator,
   stepRecoilSpring,
+  createPoseWeights,
+  stepPoseWeights,
   applyEntitySeparation,
   raycastVoxels,
   createStepEvents,
@@ -376,6 +379,7 @@ export function createVoxelAvatar(name, colorIdx = 0, isLocal = false) {
     damageFlashTimer: 0,
     landingCompression: 0,
     wasAirborne: false,
+    poseWeights: createPoseWeights(),
     activeWeapon: 'fists',
     lastAlpha: 1.0,
     hideWeaponInAds: false
@@ -466,7 +470,8 @@ export function createVoxelAvatar(name, colorIdx = 0, isLocal = false) {
       dt = 0.016,
       isSliding = false,
       isCrouching = false,
-      isHealing = false
+      isHealing = false,
+      horizSpeed = null
     ) {
       st.breathClock += dt * 2.3;
       st.recoilAmount = damp(st.recoilAmount, 0, 16, dt);
@@ -772,163 +777,182 @@ export function createVoxelAvatar(name, colorIdx = 0, isLocal = false) {
         return;
       }
 
-      leftLeg.hip.rotation.z = damp(leftLeg.hip.rotation.z || 0, 0.04, speed, dt);
-      rightLeg.hip.rotation.z = damp(rightLeg.hip.rotation.z || 0, -0.04, speed, dt);
+      // Mezcla continua de poses por pesos (blending: idle, walk, sprint, crouch, slide y salto/caída)
+      const isJump = moveMode === 'jump';
+      const isFall = moveMode === 'fall';
+      const isAir = isJump || isFall;
+      const isSlideNow = Boolean(isSliding || moveMode === 'slide');
+      const isSprint = moveMode === 'sprint';
+      const isWalk = moveMode === 'walk' || isSprint || moveMode === 'crouch_walk';
 
-      if (isSliding || moveMode === 'slide') {
-        // Animación v2 ('slide'): cadera baja, torso reclinado, pierna izquierda extendida y derecha recogida (kneeR = 2.05)
-        pelvisGroup.position.y = damp(pelvisGroup.position.y, 0.44, 16, dt);
-        pelvisGroup.rotation.set(damp(pelvisGroup.rotation.x, -0.48, 16, dt), 0, 0);
-        torsoGroup.rotation.set(
-          damp(torsoGroup.rotation.x, 0.38 - pitch * 0.45, 15, dt),
-          damp(torsoGroup.rotation.y, -0.18, 15, dt),
-          damp(torsoGroup.rotation.z, 0.12, 15, dt)
-        );
-        if (ruanaFrontPivot) ruanaFrontPivot.rotation.x = damp(ruanaFrontPivot.rotation.x, 0.58, 15, dt);
-        if (ruanaBackPivot) ruanaBackPivot.rotation.x = damp(ruanaBackPivot.rotation.x, -0.16, 15, dt);
+      const w = stepPoseWeights(
+        st.poseWeights,
+        {
+          isSliding: isSlideNow,
+          isAir,
+          isCrouching: Boolean(isCrouching),
+          isSprint,
+          isWalk,
+          horizSpeed
+        },
+        dt,
+        ANIMATION_FEEL_CONFIG
+      );
 
-        leftLeg.hip.rotation.set(damp(leftLeg.hip.rotation.x, -1.02, 16, dt), 0, 0.08);
-        leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, 0.12, 16, dt);
-        if (leftLeg.ankle) leftLeg.ankle.rotation.x = damp(leftLeg.ankle.rotation.x, -0.15, 16, dt);
-
-        rightLeg.hip.rotation.set(damp(rightLeg.hip.rotation.x, -0.18, 16, dt), 0, -0.38);
-        rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, 2.02, 16, dt);
-        if (rightLeg.ankle) rightLeg.ankle.rotation.x = damp(rightLeg.ankle.rotation.x, 0.35, 16, dt);
-      } else {
-        // Ciclo completo de locomoción Animación v2 (cadera -> rodilla -> despegue de puntera en tobillo + ruanaF/B + mochila)
-        const isJump = moveMode === 'jump';
-        const isFall = moveMode === 'fall';
-        const isAir = isJump || isFall;
-        const isSprint = moveMode === 'sprint';
-        const isWalk = moveMode === 'walk' || isSprint || moveMode === 'crouch_walk';
-        const runFactor = isSprint ? 1.0 : 0.0;
-
-        if (st.wasAirborne && !isAir) {
-          st.landingCompression = 0.18;
-        }
-        st.wasAirborne = isAir;
-        st.landingCompression = damp(st.landingCompression, 0, 10, dt);
-
-        const breath = Math.sin(st.breathClock * 0.75);
-        const sPhi = Math.sin(walkPhase);
-        const cPhi = Math.cos(walkPhase);
-        const strideAmp = isSprint ? 0.78 : activeHeal ? 0.28 : isCrouching ? 0.40 : isWalk ? 0.44 : 0;
-        const thL = -strideAmp * sPhi;
-        const thR = strideAmp * sPhi;
-        const vertBob =
-          isWalk && !isAir
-            ? -(0.02 + 0.03 * runFactor) - (0.035 + 0.03 * runFactor) * sPhi * sPhi
-            : -0.008 * (1 + Math.sin(st.breathClock * 0.8));
-        const basePelvisY = isCrouching ? 0.64 : activeHeal ? 0.92 : 0.985;
-
-        pelvisGroup.position.y = damp(
-          pelvisGroup.position.y,
-          basePelvisY + vertBob - st.landingCompression,
-          16,
-          dt
-        );
-        if (isWalk && !isAir) {
-          pelvisGroup.rotation.set(
-            damp(pelvisGroup.rotation.x, 0.04 + 0.08 * runFactor, 14, dt),
-            damp(pelvisGroup.rotation.y || 0, 0.07 * sPhi, 14, dt),
-            damp(pelvisGroup.rotation.z || 0, 0.025 * cPhi, 14, dt)
-          );
-        }
-
-        if (chestGroup) {
-          chestGroup.scale.y = 1 + breath * 0.015;
-        }
-        if (ruanaFrontPivot && ruanaBackPivot) {
-          const targetRuanaF = isAir
-            ? 0.35
-            : isWalk
-            ? 0.05 + Math.max(0, Math.max(-thL, -thR) - 0.15) * 0.6
-            : 0.04;
-          const targetRuanaB = isAir
-            ? -0.25
-            : isWalk
-            ? -0.05 - 0.28 * runFactor + 0.05 * Math.sin(st.breathClock * 3.8) * runFactor
-            : -0.03;
-          ruanaFrontPivot.rotation.x = damp(ruanaFrontPivot.rotation.x, targetRuanaF, 14, dt);
-          ruanaBackPivot.rotation.x = damp(ruanaBackPivot.rotation.x, targetRuanaB, 14, dt);
-        }
-        if (ruanaGroup) {
-          const targetRuanaZ = isWalk && !isAir ? thL * 0.07 : breath * 0.012;
-          ruanaGroup.rotation.set(0, 0, damp(ruanaGroup.rotation.z, targetRuanaZ, 12, dt));
-        }
-        if (backpackGroup) {
-          const targetPack = isWalk && !isAir ? 0.05 * Math.sin(walkPhase * 2) * (0.5 + runFactor) : 0.012 * breath;
-          backpackGroup.rotation.x = damp(backpackGroup.rotation.x, targetPack, 14, dt);
-        }
-
-        const targetTorsoPitch = activeHeal
-          ? 0.16
-          : isCrouching
-          ? 0.32
-          : isSprint
-          ? 0.26
-          : isAir
-          ? 0.14
-          : 0.06 - pitch * 0.35 + st.landingCompression * 0.5 + breath * 0.015;
-        const targetTorsoYaw = isWalk && !isAir ? -0.06 * sPhi : 0;
-        torsoGroup.rotation.set(
-          damp(torsoGroup.rotation.x, targetTorsoPitch - st.recoilAmount * 0.05, speed, dt),
-          damp(torsoGroup.rotation.y, targetTorsoYaw, speed, dt),
-          damp(torsoGroup.rotation.z, 0, speed, dt)
-        );
-        if (neckGroup) {
-          neckGroup.rotation.set(
-            damp(neckGroup.rotation.x, isSprint ? -0.12 : activeHeal ? 0.22 : 0, 14, dt),
-            0,
-            0
-          );
-        }
-
-        if (isAir) {
-          const rising = isJump ? 1.0 : 0.25;
-          leftLeg.hip.rotation.x = damp(leftLeg.hip.rotation.x, -0.55 - 0.35 * rising, speed, dt);
-          leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, 0.78 + 0.52 * rising, speed, dt);
-          rightLeg.hip.rotation.x = damp(rightLeg.hip.rotation.x, -0.25 - 0.30 * rising, speed, dt);
-          rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, 0.58 + 0.40 * rising, speed, dt);
-          if (leftLeg.ankle) leftLeg.ankle.rotation.x = damp(leftLeg.ankle.rotation.x, 0.34, speed, dt);
-          if (rightLeg.ankle) rightLeg.ankle.rotation.x = damp(rightLeg.ankle.rotation.x, 0.28, speed, dt);
-        } else if (isCrouching) {
-          leftLeg.hip.rotation.x = damp(leftLeg.hip.rotation.x, -0.78 + thL * 0.5, 16, dt);
-          leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, 1.38, 16, dt);
-          rightLeg.hip.rotation.x = damp(rightLeg.hip.rotation.x, -0.78 + thR * 0.5, 16, dt);
-          rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, 1.38, 16, dt);
-          if (leftLeg.ankle) leftLeg.ankle.rotation.x = damp(leftLeg.ankle.rotation.x, -0.25, 16, dt);
-          if (rightLeg.ankle) rightLeg.ankle.rotation.x = damp(rightLeg.ankle.rotation.x, -0.25, 16, dt);
-        } else if (isWalk) {
-          const kAmp = 0.85 + 0.70 * runFactor;
-          const landingKnee = st.landingCompression * 1.5;
-          const kneeL = 0.10 + kAmp * Math.pow(Math.max(0, cPhi), 1.5) + 0.12 * Math.max(0, sPhi) * runFactor + landingKnee;
-          const kneeR = 0.10 + kAmp * Math.pow(Math.max(0, -cPhi), 1.5) + 0.12 * Math.max(0, -sPhi) * runFactor + landingKnee;
-          const pushL = strideAmp > 0 ? Math.max(0, thL / strideAmp) : 0;
-          const pushR = strideAmp > 0 ? Math.max(0, thR / strideAmp) : 0;
-          const ankleL = -(thL + kneeL) * 0.65 + 0.32 * pushL * (0.6 + runFactor);
-          const ankleR = -(thR + kneeR) * 0.65 + 0.32 * pushR * (0.6 + runFactor);
-
-          leftLeg.hip.rotation.x = damp(leftLeg.hip.rotation.x, thL - landingKnee * 0.5, 16, dt);
-          leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, kneeL, 16, dt);
-          rightLeg.hip.rotation.x = damp(rightLeg.hip.rotation.x, thR - landingKnee * 0.5, 16, dt);
-          rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, kneeR, 16, dt);
-          if (leftLeg.ankle) leftLeg.ankle.rotation.x = damp(leftLeg.ankle.rotation.x, ankleL, 16, dt);
-          if (rightLeg.ankle) rightLeg.ankle.rotation.x = damp(rightLeg.ankle.rotation.x, ankleR, 16, dt);
-        } else {
-          // Postura táctica escalonada en reposo/apuntado (Animación v2 'idle' / 'aim')
-          const sw = Math.sin(st.breathClock * 0.35);
-          const landingKnee = st.landingCompression * 1.5;
-          const kL = 0.11 + 0.03 * sw + landingKnee;
-          const kR = 0.11 - 0.03 * sw + landingKnee;
-          leftLeg.hip.rotation.x = damp(leftLeg.hip.rotation.x, -0.10 - landingKnee * 0.5, 12, dt);
-          rightLeg.hip.rotation.x = damp(rightLeg.hip.rotation.x, 0.08 - landingKnee * 0.5, 12, dt);
-          leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, kL, 12, dt);
-          rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, kR, 12, dt);
-          if (leftLeg.ankle) leftLeg.ankle.rotation.x = damp(leftLeg.ankle.rotation.x, -kL * 0.85, 12, dt);
-          if (rightLeg.ankle) rightLeg.ankle.rotation.x = damp(rightLeg.ankle.rotation.x, -kR * 0.85, 12, dt);
-        }
+      if (st.wasAirborne && !isAir && !isSlideNow) {
+        st.landingCompression = 0.18;
       }
+      st.wasAirborne = isAir;
+      st.landingCompression = damp(st.landingCompression, 0, 10, dt);
+
+      const breath = Math.sin(st.breathClock * 0.75);
+      const sw = Math.sin(st.breathClock * 0.35);
+      const sPhi = Math.sin(walkPhase);
+      const cPhi = Math.cos(walkPhase);
+      const locoWeight = w.walk + w.sprint + w.crouch * (moveMode === 'crouch_walk' || (horizSpeed || 0) > 0.25 ? 1 : 0);
+      const runFactor = w.sprint;
+
+      const strideAmp = activeHeal
+        ? 0.28 * locoWeight
+        : w.walk * 0.44 + w.sprint * 0.78 + w.crouch * (moveMode === 'crouch_walk' || (horizSpeed || 0) > 0.25 ? 0.40 : 0);
+      const thL = -strideAmp * sPhi;
+      const thR = strideAmp * sPhi;
+
+      const walkVertBob = -(0.02 + 0.03 * runFactor) - (0.035 + 0.03 * runFactor) * sPhi * sPhi;
+      const idleVertBob = -0.008 * (1 + Math.sin(st.breathClock * 0.8));
+      const blendedPelvisY =
+        (w.idle + w.walk + w.sprint + w.air) * (activeHeal ? 0.92 : 0.985) +
+        w.crouch * 0.64 +
+        w.slide * 0.44 +
+        (w.walk + w.sprint) * walkVertBob +
+        w.idle * idleVertBob -
+        st.landingCompression * (1 - w.slide);
+
+      const blendedPelvisRotX =
+        (w.walk + w.sprint) * (0.04 + 0.08 * runFactor) +
+        w.slide * -0.48;
+      const blendedPelvisRotY = (w.walk + w.sprint) * (0.07 * sPhi);
+      const blendedPelvisRotZ = (w.walk + w.sprint) * (0.025 * cPhi);
+
+      pelvisGroup.position.y = damp(pelvisGroup.position.y, blendedPelvisY, 16, dt);
+      pelvisGroup.rotation.set(
+        damp(pelvisGroup.rotation.x, blendedPelvisRotX, 15, dt),
+        damp(pelvisGroup.rotation.y || 0, blendedPelvisRotY, 15, dt),
+        damp(pelvisGroup.rotation.z || 0, blendedPelvisRotZ, 15, dt)
+      );
+
+      if (chestGroup) {
+        chestGroup.scale.y = 1 + breath * 0.015;
+      }
+      if (ruanaFrontPivot && ruanaBackPivot) {
+        const ruanaFWalk = 0.05 + Math.max(0, Math.max(-thL, -thR) - 0.15) * 0.6;
+        const targetRuanaF =
+          w.slide * 0.58 +
+          w.air * 0.35 +
+          (w.walk + w.sprint) * ruanaFWalk +
+          (w.idle + w.crouch) * 0.04;
+        const ruanaBWalk = -0.05 - 0.28 * runFactor + 0.05 * Math.sin(st.breathClock * 3.8) * runFactor;
+        const targetRuanaB =
+          w.slide * -0.16 +
+          w.air * -0.25 +
+          (w.walk + w.sprint) * ruanaBWalk +
+          (w.idle + w.crouch) * -0.03;
+        ruanaFrontPivot.rotation.x = damp(ruanaFrontPivot.rotation.x, targetRuanaF, 14, dt);
+        ruanaBackPivot.rotation.x = damp(ruanaBackPivot.rotation.x, targetRuanaB, 14, dt);
+      }
+      if (ruanaGroup) {
+        const targetRuanaZ = (w.walk + w.sprint) * (thL * 0.07) + w.idle * (breath * 0.012);
+        ruanaGroup.rotation.set(0, 0, damp(ruanaGroup.rotation.z, targetRuanaZ, 12, dt));
+      }
+      if (backpackGroup) {
+        const targetPack =
+          (w.walk + w.sprint) * (0.05 * Math.sin(walkPhase * 2) * (0.5 + runFactor)) +
+          w.idle * (0.012 * breath);
+        backpackGroup.rotation.x = damp(backpackGroup.rotation.x, targetPack, 14, dt);
+      }
+
+      const idleTorsoPitch = 0.06 - pitch * 0.35 + st.landingCompression * 0.5 + breath * 0.015;
+      const targetTorsoPitch = activeHeal
+        ? 0.16
+        : w.slide * (0.38 - pitch * 0.45) +
+          w.crouch * 0.32 +
+          w.sprint * 0.26 +
+          w.air * 0.14 +
+          (w.idle + w.walk) * idleTorsoPitch;
+      const targetTorsoYaw = w.slide * -0.18 + (w.walk + w.sprint) * (-0.06 * sPhi);
+      const targetTorsoRoll = w.slide * 0.12;
+      torsoGroup.rotation.set(
+        damp(torsoGroup.rotation.x, targetTorsoPitch - st.recoilAmount * 0.05, speed, dt),
+        damp(torsoGroup.rotation.y, targetTorsoYaw, speed, dt),
+        damp(torsoGroup.rotation.z, targetTorsoRoll, speed, dt)
+      );
+      if (neckGroup) {
+        const neckPitch = activeHeal ? 0.22 : -0.12 * w.sprint;
+        neckGroup.rotation.set(damp(neckGroup.rotation.x, neckPitch, 14, dt), 0, 0);
+      }
+
+      // Poses individuales de tren inferior para mezcla ponderada sin cortes
+      const landingKnee = st.landingCompression * 1.5 * (1 - w.slide);
+
+      // 1) Idle
+      const idleKL = 0.11 + 0.03 * sw + landingKnee;
+      const idleKR = 0.11 - 0.03 * sw + landingKnee;
+      const idleHipL = -0.10 - landingKnee * 0.5;
+      const idleHipR = 0.08 - landingKnee * 0.5;
+      const idleAnkleL = -idleKL * 0.85;
+      const idleAnkleR = -idleKR * 0.85;
+
+      // 2) Walk + Sprint
+      const wsWeight = w.walk + w.sprint;
+      const wsRunRatio = wsWeight > 1e-4 ? w.sprint / wsWeight : 0;
+      const kAmp = 0.85 + 0.70 * wsRunRatio;
+      const walkKL = 0.10 + kAmp * Math.pow(Math.max(0, cPhi), 1.5) + 0.12 * Math.max(0, sPhi) * wsRunRatio + landingKnee;
+      const walkKR = 0.10 + kAmp * Math.pow(Math.max(0, -cPhi), 1.5) + 0.12 * Math.max(0, -sPhi) * wsRunRatio + landingKnee;
+      const pushL = strideAmp > 1e-4 ? Math.max(0, thL / strideAmp) : 0;
+      const pushR = strideAmp > 1e-4 ? Math.max(0, thR / strideAmp) : 0;
+      const walkAnkleL = -(thL + walkKL) * 0.65 + 0.32 * pushL * (0.6 + wsRunRatio);
+      const walkAnkleR = -(thR + walkKR) * 0.65 + 0.32 * pushR * (0.6 + wsRunRatio);
+      const walkHipL = thL - landingKnee * 0.5;
+      const walkHipR = thR - landingKnee * 0.5;
+
+      // 3) Crouch
+      const crouchHipL = -0.78 + thL * 0.5;
+      const crouchHipR = -0.78 + thR * 0.5;
+      const crouchK = 1.38;
+      const crouchAnkle = -0.25;
+
+      // 4) Slide
+      const slideHipL = -1.02;
+      const slideHipR = -0.18;
+      const slideKL = 0.12;
+      const slideKR = 2.02;
+      const slideAnkleL = -0.15;
+      const slideAnkleR = 0.35;
+
+      // 5) Air (Jump / Fall)
+      const rising = isJump ? 1.0 : 0.25;
+      const airHipL = -0.55 - 0.35 * rising;
+      const airHipR = -0.25 - 0.30 * rising;
+      const airKL = 0.78 + 0.52 * rising;
+      const airKR = 0.58 + 0.40 * rising;
+      const airAnkleL = 0.34;
+      const airAnkleR = 0.28;
+
+      const finalHipLX = w.idle * idleHipL + wsWeight * walkHipL + w.crouch * crouchHipL + w.slide * slideHipL + w.air * airHipL;
+      const finalHipRX = w.idle * idleHipR + wsWeight * walkHipR + w.crouch * crouchHipR + w.slide * slideHipR + w.air * airHipR;
+      const finalHipLZ = 0.04 * (1 - w.slide) + 0.08 * w.slide;
+      const finalHipRZ = -0.04 * (1 - w.slide) - 0.38 * w.slide;
+      const finalKL = w.idle * idleKL + wsWeight * walkKL + w.crouch * crouchK + w.slide * slideKL + w.air * airKL;
+      const finalKR = w.idle * idleKR + wsWeight * walkKR + w.crouch * crouchK + w.slide * slideKR + w.air * airKR;
+      const finalAnkleL = w.idle * idleAnkleL + wsWeight * walkAnkleL + w.crouch * crouchAnkle + w.slide * slideAnkleL + w.air * airAnkleL;
+      const finalAnkleR = w.idle * idleAnkleR + wsWeight * walkAnkleR + w.crouch * crouchAnkle + w.slide * slideAnkleR + w.air * airAnkleR;
+
+      leftLeg.hip.rotation.set(damp(leftLeg.hip.rotation.x, finalHipLX, 16, dt), 0, damp(leftLeg.hip.rotation.z || 0, finalHipLZ, 16, dt));
+      rightLeg.hip.rotation.set(damp(rightLeg.hip.rotation.x, finalHipRX, 16, dt), 0, damp(rightLeg.hip.rotation.z || 0, finalHipRZ, 16, dt));
+      leftLeg.knee.rotation.x = damp(leftLeg.knee.rotation.x, finalKL, 16, dt);
+      rightLeg.knee.rotation.x = damp(rightLeg.knee.rotation.x, finalKR, 16, dt);
+      if (leftLeg.ankle) leftLeg.ankle.rotation.x = damp(leftLeg.ankle.rotation.x, finalAnkleL, 16, dt);
+      if (rightLeg.ankle) rightLeg.ankle.rotation.x = damp(rightLeg.ankle.rotation.x, finalAnkleR, 16, dt);
 
       const recoilKick = st.recoilAmount * 0.28;
       const isTwoHandLongGun =
@@ -937,7 +961,7 @@ export function createVoxelAvatar(name, colorIdx = 0, isLocal = false) {
         equipped === 'shotgun' ||
         equipped === 'smg' ||
         equipped === 'sniper';
-      const isSprintingCarry = moveMode === 'sprint' && !isSliding && st.recoilAmount < 0.05;
+      const sprintCarryW = st.recoilAmount < 0.05 ? w.sprint * (1 - w.slide) : 0;
 
       if (activeHeal) {
         // Animación v2 ('heal'): botiquín sostenido entre ambas manos mediante IK analítico de 2 huesos
@@ -958,18 +982,20 @@ export function createVoxelAvatar(name, colorIdx = 0, isLocal = false) {
       }
 
       if (isTwoHandLongGun) {
-        if (isSprintingCarry) {
-          // Porte cruzado táctico ('high port' de Animación v2) + mano izquierda en el guardamanos con IK
-          rightArm.shoulder.rotation.set(damp(rightArm.shoulder.rotation.x, -0.98, speed, dt), 0.38, -0.06);
-          rightArm.elbow.rotation.set(damp(rightArm.elbow.rotation.x, -0.68, speed, dt), 0, 0);
-        } else {
-          rightArm.shoulder.rotation.set(
-            damp(rightArm.shoulder.rotation.x, -1.34 - pitch * 0.72 + recoilKick, 18, dt),
-            damp(rightArm.shoulder.rotation.y, -0.08, speed, dt),
-            0
-          );
-          rightArm.elbow.rotation.set(damp(rightArm.elbow.rotation.x, -0.26 - recoilKick * 0.6, 18, dt), 0, 0);
-        }
+        const aimShoulderX = -1.34 - pitch * 0.72 + recoilKick;
+        const aimShoulderY = -0.08;
+        const aimElbowX = -0.26 - recoilKick * 0.6;
+        const targetShX = aimShoulderX * (1 - sprintCarryW) + -0.98 * sprintCarryW;
+        const targetShY = aimShoulderY * (1 - sprintCarryW) + 0.38 * sprintCarryW;
+        const targetShZ = -0.06 * sprintCarryW;
+        const targetElX = aimElbowX * (1 - sprintCarryW) + -0.68 * sprintCarryW;
+
+        rightArm.shoulder.rotation.set(
+          damp(rightArm.shoulder.rotation.x, targetShX, 18, dt),
+          damp(rightArm.shoulder.rotation.y, targetShY, speed, dt),
+          damp(rightArm.shoulder.rotation.z || 0, targetShZ, speed, dt)
+        );
+        rightArm.elbow.rotation.set(damp(rightArm.elbow.rotation.x, targetElX, 18, dt), 0, 0);
         // IK analítico de 2 huesos (solveArmIK): mano izquierda sujeta exactamente el guardamanos de cada arma de Armas v1
         torsoGroup.updateMatrixWorld(true);
         if (activeW?.userData?.forendGripPos) {
@@ -2205,7 +2231,8 @@ export class LocalPlayerController {
           dt,
           this.isSliding,
           this.isCrouching,
-          this.isHealing
+          this.isHealing,
+          Math.hypot(this.vx || 0, this.vz || 0)
         );
       }
     }

@@ -5,7 +5,8 @@ import {
   CELL_SIZE,
   GRID_SIZE,
   WORLD_HALF,
-  LAGOON_CONFIG
+  LAGOON_CONFIG,
+  ANIMATION_FEEL_CONFIG
 } from './config.js';
 
 export function createRNG(seed) {
@@ -152,6 +153,79 @@ export function stepRecoilSpring(recoilState, dt, cfg) {
   recoilState.yawVel = yawSpring.vel;
 
   return recoilState;
+}
+
+export function createPoseWeights() {
+  return { idle: 1, walk: 0, sprint: 0, crouch: 0, slide: 0, air: 0 };
+}
+
+/**
+ * Actualiza pesos continuos normalizados (partición de la unidad = 1.0) entre poses de locomoción
+ * para evitar cortes bruscos al pasar entre idle, caminar, correr, saltar y agachado/slide.
+ */
+export function stepPoseWeights(weights, info, dt, cfg = ANIMATION_FEEL_CONFIG) {
+  let tIdle = 0;
+  let tWalk = 0;
+  let tSprint = 0;
+  let tCrouch = 0;
+  let tSlide = 0;
+  let tAir = 0;
+
+  const speed = Number.isFinite(info?.horizSpeed) ? info.horizSpeed : 0;
+  if (info?.isSliding) {
+    tSlide = 1;
+  } else if (info?.isAir) {
+    tAir = 1;
+  } else if (info?.isCrouching) {
+    tCrouch = 1;
+  } else if (info?.isSprint || speed >= cfg.sprintWeightThreshold) {
+    const sprintBlend =
+      info?.isSprint && speed <= 0
+        ? 1
+        : Math.max(0, Math.min(1, (speed - 5.2) / Math.max(0.5, cfg.sprintWeightThreshold - 5.2)));
+    tSprint = Math.max(info?.isSprint ? 0.85 : 0, sprintBlend);
+    tWalk = 1 - tSprint;
+  } else if (info?.isWalk || speed >= cfg.minMoveSpeedForWalk) {
+    const walkBlend = info?.isWalk && speed <= 0 ? 1 : Math.max(0.35, Math.min(1, speed / 4.5));
+    tWalk = walkBlend;
+    tIdle = 1 - tWalk;
+  } else {
+    tIdle = 1;
+  }
+
+  const alpha = dt > 0 ? 1 - Math.exp(-(cfg.poseBlendRate || 12) * dt) : 1;
+  weights.idle += (tIdle - weights.idle) * alpha;
+  weights.walk += (tWalk - weights.walk) * alpha;
+  weights.sprint += (tSprint - weights.sprint) * alpha;
+  weights.crouch += (tCrouch - weights.crouch) * alpha;
+  weights.slide += (tSlide - weights.slide) * alpha;
+  weights.air += (tAir - weights.air) * alpha;
+
+  const sum =
+    weights.idle +
+    weights.walk +
+    weights.sprint +
+    weights.crouch +
+    weights.slide +
+    weights.air;
+  if (sum > 1e-6) {
+    const inv = 1 / sum;
+    weights.idle *= inv;
+    weights.walk *= inv;
+    weights.sprint *= inv;
+    weights.crouch *= inv;
+    weights.slide *= inv;
+    weights.air *= inv;
+  } else {
+    weights.idle = 1;
+    weights.walk = 0;
+    weights.sprint = 0;
+    weights.crouch = 0;
+    weights.slide = 0;
+    weights.air = 0;
+  }
+
+  return weights;
 }
 
 export function valueNoise2D(x, z, seed) {

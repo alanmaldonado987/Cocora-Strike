@@ -5,7 +5,7 @@
 // - Liberación completa de memoria WebGL (avatar.dispose) al desconectarse o reiniciar partida
 // - Soporte para animación canalizada de curación (2.0s) con partículas verdes ascendentes
 
-import { CABIN_DISEMBARK_MS } from '/shared/mapData.js';
+import { CABIN_DISEMBARK_MS, ANIMATION_FEEL_CONFIG } from '/shared/mapData.js';
 import { createVoxelAvatar } from './player.js';
 import { ServerClock, SnapshotBuffer, createSampleOut } from './interpolation.js';
 
@@ -193,6 +193,8 @@ export class NetworkManager {
           yaw: pData.yaw || 0,
           pitch: pData.pitch || 0,
           animWalk: pData.animWalk || 0,
+          localWalkPhase: pData.animWalk || 0,
+          horizSpeed: 0,
           moveMode: pData.moveMode || 'idle',
           isSliding: Boolean(pData.isSliding),
           isCrouching: Boolean(pData.isCrouching),
@@ -286,10 +288,15 @@ export class NetworkManager {
         this.scene.add(entry.avatar.root);
       }
 
+      let horizSpeed = 0;
+      let sampleVy = 0;
       if (hasSample) {
-        // Posición y orientación interpoladas entre los snapshots que rodean renderTime
+        // Posición, velocidad y orientación interpoladas entre los snapshots que rodean renderTime
         entry.yaw = _sample.yaw;
         entry.avatar.root.position.set(_sample.x, _sample.y, _sample.z);
+        horizSpeed = Math.hypot(_sample.vx || 0, _sample.vz || 0);
+        sampleVy = _sample.vy || 0;
+        entry.horizSpeed = horizSpeed;
       }
 
       if (mapData) {
@@ -307,12 +314,48 @@ export class NetworkManager {
       entry.avatar.root.visible = true;
       entry.avatar.root.rotation.set(0, entry.yaw, 0);
       entry.avatar.setWeapon(entry.equipped);
-      const effectiveMode =
+
+      let effectiveMode =
         entry.isSwimming && entry.moveMode !== 'swim' && entry.moveMode !== 'swim_fast' && entry.moveMode !== 'swim_idle'
           ? 'swim'
           : entry.moveMode;
+
+      if (hasSample && entry.state === 'ground' && !entry.isSwimming && !entry.isSliding && effectiveMode !== 'vault') {
+        if (Math.abs(sampleVy) > 2.4 && _sample.data?.onGround === false) {
+          effectiveMode = sampleVy > 0.5 ? 'jump' : 'fall';
+        } else if (horizSpeed >= ANIMATION_FEEL_CONFIG.sprintWeightThreshold) {
+          effectiveMode = entry.isCrouching ? 'crouch_walk' : 'sprint';
+        } else if (horizSpeed >= ANIMATION_FEEL_CONFIG.minMoveSpeedForWalk) {
+          effectiveMode = entry.isCrouching ? 'crouch_walk' : 'walk';
+        } else if (horizSpeed < 0.12 && (effectiveMode === 'walk' || effectiveMode === 'sprint' || effectiveMode === 'crouch_walk')) {
+          effectiveMode = entry.isCrouching ? 'crouch_idle' : 'idle';
+        }
+      }
+
+      // Integrar y adelantar ligeramente la fase de zancada según el vector de velocidad real del avatar remoto
+      let animPhaseToRender = entry.animWalk;
+      if (hasSample) {
+        const stepRate =
+          effectiveMode === 'swim' || effectiveMode === 'swim_fast'
+            ? (effectiveMode === 'swim_fast' ? 7.5 : 5.2)
+            : effectiveMode === 'sprint'
+            ? 13.0 * Math.max(0.65, Math.min(1.25, horizSpeed / 8.2))
+            : effectiveMode === 'crouch_walk'
+            ? 7.0 * Math.max(0.55, Math.min(1.25, horizSpeed / 3.4))
+            : horizSpeed >= ANIMATION_FEEL_CONFIG.minMoveSpeedForWalk
+            ? 9.5 * Math.max(0.50, Math.min(1.25, horizSpeed / 5.5))
+            : 0;
+        if (_sample.teleported) {
+          entry.localWalkPhase = entry.animWalk || 0;
+        } else if (stepRate > 0) {
+          entry.localWalkPhase = (entry.localWalkPhase || entry.animWalk || 0) + dt * stepRate;
+        }
+        const basePhase = stepRate > 0 ? entry.localWalkPhase : entry.animWalk;
+        animPhaseToRender = basePhase + stepRate * ANIMATION_FEEL_CONFIG.remoteAnimLeadSec;
+      }
+
       entry.avatar.animate(
-        entry.animWalk,
+        animPhaseToRender,
         entry.state,
         entry.equipped,
         entry.pitch,
@@ -320,7 +363,8 @@ export class NetworkManager {
         dt,
         entry.isSliding,
         entry.isCrouching,
-        entry.isHealing
+        entry.isHealing,
+        horizSpeed
       );
 
       if ((entry.isSwimming || effectiveMode === 'swim' || effectiveMode === 'swim_fast' || effectiveMode === 'swim_idle') && worldInstance) {

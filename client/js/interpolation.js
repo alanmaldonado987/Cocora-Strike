@@ -145,7 +145,8 @@ export class SnapshotBuffer {
       // Sin snapshot posterior: prolongar brevemente con la última velocidad conocida
       const prev = this.at(1);
       const span = newest.t - prev.t;
-      const ahead = Math.min(renderTime - newest.t, MAX_EXTRAPOLATION_MS);
+      const rawAhead = renderTime - newest.t;
+      const ahead = Math.min(rawAhead, MAX_EXTRAPOLATION_MS);
       const jump = Math.hypot(newest.x - prev.x, newest.z - prev.z);
       if (span <= 0 || jump > TELEPORT_DISTANCE) {
         copyInto(out, newest, false);
@@ -155,6 +156,16 @@ export class SnapshotBuffer {
       out.x = newest.x + (newest.x - prev.x) * k;
       out.y = newest.y + (newest.y - prev.y) * k;
       out.z = newest.z + (newest.z - prev.z) * k;
+      if (rawAhead <= MAX_EXTRAPOLATION_MS) {
+        const invSec = 1000 / span;
+        out.vx = (newest.x - prev.x) * invSec;
+        out.vy = (newest.y - prev.y) * invSec;
+        out.vz = (newest.z - prev.z) * invSec;
+      } else {
+        out.vx = 0;
+        out.vy = 0;
+        out.vz = 0;
+      }
       out.yaw = newest.yaw;
       out.data = newest.data;
       out.teleported = false;
@@ -170,10 +181,15 @@ export class SnapshotBuffer {
           copyInto(out, older, true);
           return true;
         }
-        const t = (renderTime - older.t) / (newer.t - older.t);
+        const span = newer.t - older.t;
+        const t = (renderTime - older.t) / span;
+        const invSec = span > 0 ? 1000 / span : 0;
         out.x = older.x + (newer.x - older.x) * t;
         out.y = older.y + (newer.y - older.y) * t;
         out.z = older.z + (newer.z - older.z) * t;
+        out.vx = (newer.x - older.x) * invSec;
+        out.vy = (newer.y - older.y) * invSec;
+        out.vz = (newer.z - older.z) * invSec;
         out.yaw = lerpAngle(older.yaw, newer.yaw, t);
         out.data = older.data;
         out.teleported = false;
@@ -191,11 +207,14 @@ function copyInto(out, s, teleported) {
   out.x = s.x;
   out.y = s.y;
   out.z = s.z;
+  out.vx = 0;
+  out.vy = 0;
+  out.vz = 0;
   out.yaw = s.yaw;
   out.data = s.data;
   out.teleported = teleported;
 }
 
 export function createSampleOut() {
-  return { x: 0, y: 0, z: 0, yaw: 0, data: null, teleported: false };
+  return { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, yaw: 0, data: null, teleported: false };
 }

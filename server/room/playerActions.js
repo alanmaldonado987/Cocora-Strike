@@ -28,6 +28,7 @@ import {
   stepPlayer
 } from '../../shared/mapData.js';
 import { consumeMoveBudget } from '../validation.js';
+import { S2C } from '../../shared/protocol.js';
 
 const _serverStepEvents = createStepEvents();
 
@@ -45,7 +46,7 @@ export const playerActionsMethods = {
       p.cabinDisembarkStartAt = Date.now();
       p.cabinProgress = 0.01;
       p.moveMode = 'stand';
-      this.io.emit('player_cabin_disembark', {
+      this.io.emit(S2C.PLAYER_CABIN_DISEMBARK, {
         playerId: p.id,
         seatIndex: p.seatIndex || 0,
         durationMs: CABIN_DISEMBARK_MS
@@ -54,7 +55,7 @@ export const playerActionsMethods = {
       p.state = 'parachuting';
       p.fallPeakY = p.y;
       p.vy = -computeTargetDescentSpeed(p.jumpAltitude, 'parachuting', p.pitch);
-      this.io.emit('player_jumped', { playerId: p.id, state: 'parachuting' });
+      this.io.emit(S2C.PLAYER_JUMPED, { playerId: p.id, state: 'parachuting' });
     } else if (p.state === 'ground' && clearance >= PARACHUTE_CONFIG.minClearanceToOpen) {
       p.jumpAltitude = Math.max(PARACHUTE_CONFIG.minJumpHeightRef, clearance);
       p.state = 'parachuting';
@@ -63,7 +64,7 @@ export const playerActionsMethods = {
       p.onGround = false;
       p.fallPeakY = p.y;
       p.vy = -computeTargetDescentSpeed(p.jumpAltitude, 'parachuting', p.pitch);
-      this.io.emit('player_jumped', { playerId: p.id, state: 'parachuting' });
+      this.io.emit(S2C.PLAYER_JUMPED, { playerId: p.id, state: 'parachuting' });
     }
   },
 
@@ -91,7 +92,7 @@ export const playerActionsMethods = {
     p.fallPeakY = p.y;
     p.airPeakY = p.y;
     p.vy = -PARACHUTE_CONFIG.freefallInitialSpeed;
-    this.io.emit('player_jumped', {
+    this.io.emit(S2C.PLAYER_JUMPED, {
       playerId: p.id,
       state: 'skydiving',
       jumpAltitude: p.jumpAltitude,
@@ -108,7 +109,7 @@ export const playerActionsMethods = {
     p.isSliding = Boolean(payload.active);
     if (p.isSliding) {
       p.isCrouching = false;
-      this.io.emit('player_slid', { playerId: p.id, x: p.x, y: p.y, z: p.z, yaw: p.yaw });
+      this.io.emit(S2C.PLAYER_SLID, { playerId: p.id, x: p.x, y: p.y, z: p.z, yaw: p.yaw });
     }
   },
 
@@ -156,10 +157,10 @@ export const playerActionsMethods = {
           this.cancelHealForPlayer(p);
         }
         if (ev.slideStarted) {
-          this.io.emit('player_slid', { playerId: p.id, x: p.x, y: p.y, z: p.z, yaw: p.yaw });
+          this.io.emit(S2C.PLAYER_SLID, { playerId: p.id, x: p.x, y: p.y, z: p.z, yaw: p.yaw });
         }
         if (ev.parachuteOpened) {
-          this.io.emit('player_jumped', { playerId: p.id, state: 'parachuting' });
+          this.io.emit(S2C.PLAYER_JUMPED, { playerId: p.id, state: 'parachuting' });
         }
         if (ev.vaultBreakWindowId) {
           this.handleBreakWindow(socketId, ev.vaultBreakWindowId);
@@ -323,7 +324,7 @@ export const playerActionsMethods = {
     p.healingUntil = 0;
     p.healingItem = null;
     if (!p.isBot) {
-      this.io.to(p.id).emit('heal_cancelled', { playerId: p.id });
+      this.io.to(p.id).emit(S2C.HEAL_CANCELLED, { playerId: p.id });
     }
   },
 
@@ -355,7 +356,7 @@ export const playerActionsMethods = {
     p.healingItem = chosen;
     p.healingUntil = now + (HEAL_CONFIG.durationMs || 2000);
 
-    this.io.to(socketId).emit('heal_started', {
+    this.io.to(socketId).emit(S2C.HEAL_STARTED, {
       playerId: p.id,
       itemType: chosen,
       durationMs: HEAL_CONFIG.durationMs || 2000

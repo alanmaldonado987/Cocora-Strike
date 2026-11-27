@@ -10,6 +10,7 @@ import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
 import { GameRoom } from './gameRoom.js';
 import { RateLimiter, sanitizers } from './validation.js';
+import { C2S, S2C } from '../shared/protocol.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -69,7 +70,7 @@ app.get('/health', (_req, res) => {
 
 io.on('connection', (socket) => {
   const lanList = getLocalIPv4Addresses().map((n) => `http://${n.address}:${PORT}`);
-  socket.emit('network_info', { port: PORT, lanUrls: lanList });
+  socket.emit(S2C.NETWORK_INFO, { port: PORT, lanUrls: lanList });
   room.broadcastLobbyState();
 
   const limiter = new RateLimiter();
@@ -90,26 +91,26 @@ io.on('connection', (socket) => {
     });
   };
 
-  on('join_lobby', ({ name }) => {
+  on(C2S.JOIN_LOBBY, ({ name }) => {
     const p = room.addHumanPlayer(socket, name);
-    socket.emit('lobby_joined', { selfId: p.id, phase: room.phase });
+    socket.emit(S2C.LOBBY_JOINED, { selfId: p.id, phase: room.phase });
   });
-  on('configure_bots', (cfg) => room.configureBots(cfg));
-  on('add_bot', () => room.addBot());
-  on('clear_bots', () => room.clearBots());
-  on('start_game', (opts) => room.startGame(opts));
-  on('player_jump', () => room.handlePlayerJump(socket.id));
-  on('player_input', (data) => room.handlePlayerInput(socket.id, data));
-  on('player_slide', (data) => room.handlePlayerSlide(socket.id, data));
-  on('player_shoot', (data) => room.handleShoot(socket.id, data));
-  on('player_reload', () => room.handleReload(socket.id));
-  on('player_switch_weapon', ({ weapon }) => room.handleSwitchWeapon(socket.id, weapon));
-  on('player_heal', ({ itemType }) => room.handleHeal(socket.id, itemType));
-  on('player_cancel_heal', () => room.handleCancelHeal(socket.id));
-  on('player_pickup', ({ lootId }) => room.handlePickup(socket.id, lootId));
-  on('player_interact_door', ({ doorId }) => room.handleInteractDoor(socket.id, doorId));
-  on('player_break_window', ({ windowId }) => room.handleBreakWindow(socket.id, windowId));
-  on('reset_lobby', () => room.resetToLobby(false));
+  on(C2S.CONFIGURE_BOTS, (cfg) => room.configureBots(cfg));
+  on(C2S.ADD_BOT, () => room.addBot());
+  on(C2S.CLEAR_BOTS, () => room.clearBots());
+  on(C2S.START_GAME, (opts) => room.startGame(opts));
+  on(C2S.PLAYER_JUMP, () => room.handlePlayerJump(socket.id));
+  on(C2S.PLAYER_INPUT, (data) => room.handlePlayerInput(socket.id, data));
+  on(C2S.PLAYER_SLIDE, (data) => room.handlePlayerSlide(socket.id, data));
+  on(C2S.PLAYER_SHOOT, (data) => room.handleShoot(socket.id, data));
+  on(C2S.PLAYER_RELOAD, () => room.handleReload(socket.id));
+  on(C2S.PLAYER_SWITCH_WEAPON, ({ weapon }) => room.handleSwitchWeapon(socket.id, weapon));
+  on(C2S.PLAYER_HEAL, ({ itemType }) => room.handleHeal(socket.id, itemType));
+  on(C2S.PLAYER_CANCEL_HEAL, () => room.handleCancelHeal(socket.id));
+  on(C2S.PLAYER_PICKUP, ({ lootId }) => room.handlePickup(socket.id, lootId));
+  on(C2S.PLAYER_INTERACT_DOOR, ({ doorId }) => room.handleInteractDoor(socket.id, doorId));
+  on(C2S.PLAYER_BREAK_WINDOW, ({ windowId }) => room.handleBreakWindow(socket.id, windowId));
+  on(C2S.RESET_LOBBY, () => room.resetToLobby(false));
 
   socket.on('disconnect', () => {
     room.removePlayer(socket.id);

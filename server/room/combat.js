@@ -9,6 +9,7 @@ import {
   hasLineOfSight
 } from '../../shared/mapData.js';
 import { positionAt, resolveRewindTime } from './lagCompensation.js';
+import { S2C } from '../../shared/protocol.js';
 
 export const combatMethods = {
   handleShoot(socketId, payload) {
@@ -175,7 +176,7 @@ export const combatMethods = {
       }
     }
 
-    this.io.emit('shot_fired', {
+    this.io.emit(S2C.SHOT_FIRED, {
       shooterId: shooter.id,
       weapon: weaponId,
       origin,
@@ -276,7 +277,7 @@ export const combatMethods = {
 
     victim.hp = Math.max(0, victim.hp - amount);
 
-    this.io.emit('player_damaged', {
+    this.io.emit(S2C.PLAYER_DAMAGED, {
       targetId: victim.id,
       targetName: victim.name,
       attackerId: attacker ? attacker.id : null,
@@ -314,7 +315,7 @@ export const combatMethods = {
       else if (sourceName === 'fall') killerLabel = 'Caída de Altura';
       else if (sourceName === 'drown') killerLabel = 'El Río Quindío';
 
-      this.io.emit('player_eliminated', {
+      this.io.emit(S2C.PLAYER_ELIMINATED, {
         victimId: victim.id,
         victimName: victim.name,
         killerId: attacker ? attacker.id : null,
@@ -354,7 +355,7 @@ export const combatMethods = {
         }))
         .sort((a, b) => a.placement - b.placement || b.kills - a.kills);
 
-      this.io.emit('game_over', {
+      this.io.emit(S2C.GAME_OVER, {
         winnerId: winner ? winner.id : null,
         winnerName: winner ? winner.name : 'Nadie',
         winnerKills: winner ? winner.kills : 0,

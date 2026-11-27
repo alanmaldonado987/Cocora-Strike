@@ -38,7 +38,7 @@ Regla: **extraer y organizar código sin cambiar comportamiento**. Un dominio po
 - [x] `world/` — terrain.js, foliage.js, structures.js, water.js, sky.js, lights.js, effects.js, loot.js, wildlife.js, materials.js (+ `common.js` hoja con temporales, `aircraft.js` para el avión y `groundCover.js` movido)
 
 ### 2. Shared (`shared/`)
-- [ ] `protocol.js` (ids de mensajes, cuantización)
+- [x] `protocol.js` (ids de mensajes, cuantización)
 - [ ] `physics/` — collision.js, raycast.js, playerController.js, vault.js
 - [ ] `map/` — terrain.js, buildings.js, props.js, pois.data.js
 - [ ] Constantes congeladas (`Object.freeze`) para estados (`'ground'`, `'skydiving'`, `moveMode`, …) en `shared/config.js`
@@ -65,3 +65,4 @@ Regla: **extraer y organizar código sin cambiar comportamiento**. Un dominio po
 | core | `client/js/core/{loop,quality,input}.js`; `main.js` usa `createRenderer`, `createGpuWarmUp`, `createFrameLoop`; `bindInputs`/`clearActiveInputs`/`requestRawPointerLock` salen de `player.js` | 82 pruebas; humo OK |
 | player | `client/js/player.js` → `client/js/player/{avatar,animation,viewmodel,camera,controller,weapons,avatarPerf}.js`; `damp` unificado en `shared/math.js`; imports en `main.js`, `net/network.js`, `ui/lobby.js`, `world.js`, `test/playerZeroAlloc.test.js` | 82 pruebas; humo OK (salto, paracaídas, W, cambio de cámara) |
 | world | `client/js/world.js` → `client/js/world/{world,common,materials,water,foliage,groundCover,lights,sky,terrain,structures,aircraft,loot,wildlife,effects}.js`; constructor delega en `initSharedMaterialCache()`; `damp` desde `shared/math.js` | 82 pruebas; humo OK |
+| protocol | `shared/protocol.js` (C2S/S2C congelados + `quantize`), `test/protocol.test.js`; eventos en `server/index.js`, `server/validation.js`, `server/gameRoom.js`, `server/room/*.js`, `client/js/net/network.js` | 86 pruebas; humo OK; mismos strings en cable |

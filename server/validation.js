@@ -3,6 +3,7 @@
 // Cada sanitizador devuelve un payload limpio o null si el mensaje debe descartarse.
 
 import { BOT_DIFFICULTIES, TRANSPORT_AIRCRAFT_TYPES, WEAPONS } from '../shared/mapData.js';
+import { C2S } from '../shared/protocol.js';
 
 const MAX_ID_LENGTH = 64;
 const MAX_COORD = 10000;
@@ -57,16 +58,16 @@ function botConfig(p) {
 const INPUT_STATES = new Set(['ground', 'skydiving', 'parachuting', 'plane', 'swimming']);
 
 export const sanitizers = {
-  join_lobby: (p) => ({ name: sanitizeName(isObject(p) ? p.name : '') }),
+  [C2S.JOIN_LOBBY]: (p) => ({ name: sanitizeName(isObject(p) ? p.name : '') }),
 
-  configure_bots: (p) => (isObject(p) ? botConfig(p) : null),
+  [C2S.CONFIGURE_BOTS]: (p) => (isObject(p) ? botConfig(p) : null),
 
-  start_game: (p) => {
+  [C2S.START_GAME]: (p) => {
     if (!isObject(p)) return { autoFillBots: false };
     return { autoFillBots: p.autoFillBots === true, ...botConfig(p) };
   },
 
-  player_input: (p) => {
+  [C2S.PLAYER_INPUT]: (p) => {
     if (!isObject(p)) return null;
     let steps;
     if (Array.isArray(p.steps) && p.steps.length > 0 && p.steps.length <= 12) {
@@ -112,9 +113,9 @@ export const sanitizers = {
     return out;
   },
 
-  player_slide: (p) => ({ active: isObject(p) && p.active === true }),
+  [C2S.PLAYER_SLIDE]: (p) => ({ active: isObject(p) && p.active === true }),
 
-  player_shoot: (p) => {
+  [C2S.PLAYER_SHOOT]: (p) => {
     if (!isObject(p)) return null;
     const origin = vec3(p.origin);
     const dir = vec3(p.dir);
@@ -126,27 +127,27 @@ export const sanitizers = {
     return { origin, dir: { x: dir.x / len, y: dir.y / len, z: dir.z / len }, viewTime };
   },
 
-  player_switch_weapon: (p) => {
+  [C2S.PLAYER_SWITCH_WEAPON]: (p) => {
     if (!isObject(p) || typeof p.weapon !== 'string') return null;
     return p.weapon === 'fists' || Object.hasOwn(WEAPONS, p.weapon) ? { weapon: p.weapon } : null;
   },
 
-  player_heal: (p) => {
+  [C2S.PLAYER_HEAL]: (p) => {
     const itemType = isObject(p) ? p.itemType : undefined;
     return { itemType: itemType === 'bandage' ? 'bandage' : 'medkit' };
   },
 
-  player_pickup: (p) => {
+  [C2S.PLAYER_PICKUP]: (p) => {
     const lootId = isObject(p) ? id(p.lootId) : null;
     return lootId === null ? null : { lootId };
   },
 
-  player_interact_door: (p) => {
+  [C2S.PLAYER_INTERACT_DOOR]: (p) => {
     const doorId = isObject(p) ? id(p.doorId) : null;
     return doorId === null ? null : { doorId };
   },
 
-  player_break_window: (p) => {
+  [C2S.PLAYER_BREAK_WINDOW]: (p) => {
     const windowId = isObject(p) ? id(p.windowId) : null;
     return windowId === null ? null : { windowId };
   }
@@ -155,23 +156,23 @@ export const sanitizers = {
 // Mensajes por segundo permitidos (ráfaga = rate * burstSeconds).
 // El cliente envía player_input cada 45 ms (~22/s); el arma más rápida dispara cada ~70 ms.
 export const RATE_LIMITS = {
-  player_input: 40,
-  player_shoot: 30,
-  player_slide: 6,
-  player_jump: 6,
-  player_reload: 6,
-  player_switch_weapon: 12,
-  player_heal: 6,
-  player_cancel_heal: 6,
-  player_pickup: 15,
-  player_interact_door: 8,
-  player_break_window: 10,
-  join_lobby: 3,
-  configure_bots: 6,
-  add_bot: 6,
-  clear_bots: 4,
-  start_game: 2,
-  reset_lobby: 2
+  [C2S.PLAYER_INPUT]: 40,
+  [C2S.PLAYER_SHOOT]: 30,
+  [C2S.PLAYER_SLIDE]: 6,
+  [C2S.PLAYER_JUMP]: 6,
+  [C2S.PLAYER_RELOAD]: 6,
+  [C2S.PLAYER_SWITCH_WEAPON]: 12,
+  [C2S.PLAYER_HEAL]: 6,
+  [C2S.PLAYER_CANCEL_HEAL]: 6,
+  [C2S.PLAYER_PICKUP]: 15,
+  [C2S.PLAYER_INTERACT_DOOR]: 8,
+  [C2S.PLAYER_BREAK_WINDOW]: 10,
+  [C2S.JOIN_LOBBY]: 3,
+  [C2S.CONFIGURE_BOTS]: 6,
+  [C2S.ADD_BOT]: 6,
+  [C2S.CLEAR_BOTS]: 4,
+  [C2S.START_GAME]: 2,
+  [C2S.RESET_LOBBY]: 2
 };
 
 export class RateLimiter {

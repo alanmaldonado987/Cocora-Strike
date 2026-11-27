@@ -12,6 +12,7 @@ import {
   createRNG
 } from '../../shared/mapData.js';
 import { BOT_NAMES } from './constants.js';
+import { S2C, quantize } from '../../shared/protocol.js';
 
 export const lobbyMethods = {
   addHumanPlayer(socket, nickname) {
@@ -24,7 +25,7 @@ export const lobbyMethods = {
       p.y = 58;
       p.z = 4;
       this.players.set(socket.id, p);
-      socket.emit('joined_midgame', {
+      socket.emit(S2C.JOINED_MIDGAME, {
         selfId: socket.id,
         seed: this.seed,
         loot: Array.from(this.loot.values()),
@@ -51,7 +52,7 @@ export const lobbyMethods = {
     this.players.delete(socketId);
 
     if (wasPlayingAlive) {
-      this.io.emit('player_eliminated', {
+      this.io.emit(S2C.PLAYER_ELIMINATED, {
         victimId: p.id,
         victimName: p.name,
         killerName: 'Desconexión',
@@ -151,7 +152,7 @@ export const lobbyMethods = {
       spectating: p.spectating
     }));
     const botCount = list.filter((p) => p.isBot).length;
-    this.io.emit('lobby_state', {
+    this.io.emit(S2C.LOBBY_STATE, {
       phase: this.phase,
       players: list,
       botCount,
@@ -195,7 +196,7 @@ export const lobbyMethods = {
     const valleyRefY = this.map.getTerrainHeightAt
       ? this.map.getTerrainHeightAt(0, 0)
       : this.map.getGroundHeightAt(0, 0);
-    const planeY = Number((valleyRefY + PARACHUTE_CONFIG.planeHeightAboveValley).toFixed(1));
+    const planeY = quantize(valleyRefY + PARACHUTE_CONFIG.planeHeightAboveValley, 1);
 
     const angle = rng() * Math.PI * 2;
     const startDist = 295;
@@ -283,7 +284,7 @@ export const lobbyMethods = {
       }
     }
 
-    this.io.emit('game_started', {
+    this.io.emit(S2C.GAME_STARTED, {
       seed: this.seed,
       plane: this.plane,
       storm: this.storm,
@@ -323,6 +324,6 @@ export const lobbyMethods = {
 
     this.checkAutoLobbyStart();
     this.broadcastLobbyState();
-    this.io.emit('returned_to_lobby');
+    this.io.emit(S2C.RETURNED_TO_LOBBY);
   }
 };

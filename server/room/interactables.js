@@ -3,6 +3,7 @@
 // Métodos mezclados en GameRoom.prototype (usan `this` como la sala).
 
 import { BOT_AI_CONFIG } from '../../shared/mapData.js';
+import { S2C } from '../../shared/protocol.js';
 
 const _doorSpatialQueryBuf = [];
 
@@ -30,7 +31,7 @@ export const interactablesMethods = {
         door.isOpen = true;
         if (door.collider) door.collider.enabled = false;
         opened++;
-        this.io.emit('door_state_changed', {
+        this.io.emit(S2C.DOOR_STATE_CHANGED, {
           doorId: door.id,
           isOpen: true,
           hp: door.hp,
@@ -78,7 +79,7 @@ export const interactablesMethods = {
 
     door.isOpen = !door.isOpen;
     if (door.collider) door.collider.enabled = !door.isOpen;
-    this.io.emit('door_state_changed', {
+    this.io.emit(S2C.DOOR_STATE_CHANGED, {
       doorId: door.id,
       isOpen: door.isOpen,
       hp: door.hp,
@@ -103,7 +104,7 @@ export const interactablesMethods = {
     if (!win || win.broken) return;
     win.broken = true;
     if (win.collider) win.collider.enabled = false;
-    this.io.emit('window_broken', {
+    this.io.emit(S2C.WINDOW_BROKEN, {
       windowId: win.id,
       x: win.x,
       y: win.y + win.height * 0.5,
@@ -119,7 +120,7 @@ export const interactablesMethods = {
       door.isOpen = true;
       if (door.collider) door.collider.enabled = false;
     }
-    this.io.emit('door_state_changed', {
+    this.io.emit(S2C.DOOR_STATE_CHANGED, {
       doorId: door.id,
       isOpen: door.isOpen,
       hp: door.hp,

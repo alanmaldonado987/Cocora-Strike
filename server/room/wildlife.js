@@ -10,6 +10,7 @@ import {
   hasLineOfSight
 } from '../../shared/mapData.js';
 import { normalizeAngle } from './constants.js';
+import { S2C, quantize } from '../../shared/protocol.js';
 
 export const wildlifeMethods = {
   spawnInitialWildlife(rng) {
@@ -62,7 +63,7 @@ export const wildlifeMethods = {
     const spec = WILDLIFE_TYPES[animal.species];
     animal.hp = Math.max(0, animal.hp - amount);
 
-    this.io.emit('wildlife_hit', {
+    this.io.emit(S2C.WILDLIFE_HIT, {
       animalId: animal.id,
       species: animal.species,
       speciesName: spec?.name || animal.species,
@@ -77,7 +78,7 @@ export const wildlifeMethods = {
       animal.alive = false;
       const drops = spec?.lootDrop || ['medkit', 'ammo'];
       this.spawnDroppedLootList(drops, animal.x, animal.y, animal.z);
-      this.io.emit('wildlife_killed', {
+      this.io.emit(S2C.WILDLIFE_KILLED, {
         animalId: animal.id,
         species: animal.species,
         speciesName: spec?.name || animal.species,
@@ -94,7 +95,7 @@ export const wildlifeMethods = {
       animal.targetId = attacker.id;
       animal.hostileUntil = now + 18000;
       if (!wasHostile) {
-        this.io.emit('wildlife_aggro', {
+        this.io.emit(S2C.WILDLIFE_AGGRO, {
           animalId: animal.id,
           species: animal.species,
           speciesName: spec.name,
@@ -158,7 +159,7 @@ export const wildlifeMethods = {
             animal.pose = 'attack';
             if (now - animal.lastAttackAt >= spec.attackCooldownMs) {
               animal.lastAttackAt = now;
-              this.io.emit('wildlife_attack', {
+              this.io.emit(S2C.WILDLIFE_ATTACK, {
                 animalId: animal.id,
                 species: animal.species,
                 targetId: target.id,
@@ -298,15 +299,15 @@ export const wildlifeMethods = {
       out.push({
         id: a.id,
         species: a.species,
-        x: Number(a.x.toFixed(2)),
-        y: Number(a.y.toFixed(2)),
-        z: Number(a.z.toFixed(2)),
-        yaw: Number(a.yaw.toFixed(3)),
+        x: quantize(a.x, 2),
+        y: quantize(a.y, 2),
+        z: quantize(a.z, 2),
+        yaw: quantize(a.yaw, 3),
         hp: a.hp,
         maxHp: a.maxHp,
         aiState: a.aiState,
         pose: a.pose,
-        animPhase: Number(a.animPhase.toFixed(2))
+        animPhase: quantize(a.animPhase, 2)
       });
     }
     return out;

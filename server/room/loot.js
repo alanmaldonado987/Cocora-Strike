@@ -9,6 +9,7 @@ import {
   getRiverCenterWorldX,
   hasLineOfSight
 } from '../../shared/mapData.js';
+import { S2C, quantize } from '../../shared/protocol.js';
 
 export const lootMethods = {
   spawnInitialLoot(rng) {
@@ -53,9 +54,9 @@ export const lootMethods = {
     const item = {
       id,
       type,
-      x: Number(x.toFixed(2)),
-      y: Number(y.toFixed(2)),
-      z: Number(z.toFixed(2)),
+      x: quantize(x, 2),
+      y: quantize(y, 2),
+      z: quantize(z, 2),
       onFlatStructure: Boolean(onFlatStructure)
     };
     this.loot.set(id, item);
@@ -76,7 +77,7 @@ export const lootMethods = {
       const safe = this.map.findSafeLootPlacement(cx + ox, cy, cz + oz);
       items.push(this.createLootItem(t, safe.x, safe.y, safe.z, safe.onFlatStructure));
     });
-    if (items.length > 0) this.io.emit('loot_spawned', { items });
+    if (items.length > 0) this.io.emit(S2C.LOOT_SPAWNED, { items });
   },
 
   spawnDroppedLootPair(type1, type2, cx, cy, cz) {
@@ -141,7 +142,7 @@ export const lootMethods = {
     }
 
     this.loot.delete(item.id);
-    this.io.emit('loot_picked', {
+    this.io.emit(S2C.LOOT_PICKED, {
       lootId: item.id,
       type: item.type,
       playerId: p.id,

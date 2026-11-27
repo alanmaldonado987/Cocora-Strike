@@ -8,6 +8,7 @@
 import { CABIN_DISEMBARK_MS, ANIMATION_FEEL_CONFIG } from '/shared/mapData.js';
 import { createVoxelAvatar } from '../player/avatar.js';
 import { ServerClock, SnapshotBuffer, createSampleOut } from './interpolation.js';
+import { C2S, S2C } from '/shared/protocol.js';
 
 const _sample = createSampleOut();
 
@@ -30,42 +31,42 @@ export class NetworkManager {
   registerSocketEvents() {
     const s = this.socket;
 
-    s.on('network_info', (data) => {
+    s.on(S2C.NETWORK_INFO, (data) => {
       this.callbacks.onNetworkInfo?.(data);
     });
 
-    s.on('lobby_joined', (data) => {
+    s.on(S2C.LOBBY_JOINED, (data) => {
       this.selfId = data.selfId;
       this.callbacks.onLobbyJoined?.(data);
     });
 
-    s.on('lobby_state', (data) => {
+    s.on(S2C.LOBBY_STATE, (data) => {
       this.callbacks.onLobbyState?.(data);
     });
 
-    s.on('game_started', (data) => {
+    s.on(S2C.GAME_STARTED, (data) => {
       this.clearRemoteAvatars();
       this.syncSnapshotPlayers(data.players || {});
       this.callbacks.onGameStarted?.(data);
     });
 
-    s.on('joined_midgame', (data) => {
+    s.on(S2C.JOINED_MIDGAME, (data) => {
       this.selfId = data.selfId;
       this.clearRemoteAvatars();
       this.callbacks.onJoinedMidgame?.(data);
     });
 
-    s.on('world_tick', (snapshot) => {
+    s.on(S2C.WORLD_TICK, (snapshot) => {
       this.serverClock.observe(snapshot.t, performance.now());
       this.syncSnapshotPlayers(snapshot.players || {}, snapshot.t);
       this.callbacks.onWorldTick?.(snapshot);
     });
 
-    s.on('player_slid', (data) => {
+    s.on(S2C.PLAYER_SLID, (data) => {
       this.callbacks.onPlayerSlid?.(data);
     });
 
-    s.on('player_cabin_disembark', (data) => {
+    s.on(S2C.PLAYER_CABIN_DISEMBARK, (data) => {
       const entry = this.remotePlayers.get(data?.playerId);
       if (entry) {
         entry.cabinDisembarking = true;
@@ -74,23 +75,23 @@ export class NetworkManager {
       this.callbacks.onPlayerCabinDisembark?.(data);
     });
 
-    s.on('loot_picked', (data) => {
+    s.on(S2C.LOOT_PICKED, (data) => {
       this.callbacks.onLootPicked?.(data);
     });
 
-    s.on('loot_spawned', (data) => {
+    s.on(S2C.LOOT_SPAWNED, (data) => {
       this.callbacks.onLootSpawned?.(data);
     });
 
-    s.on('door_state_changed', (data) => {
+    s.on(S2C.DOOR_STATE_CHANGED, (data) => {
       this.callbacks.onDoorStateChanged?.(data);
     });
 
-    s.on('window_broken', (data) => {
+    s.on(S2C.WINDOW_BROKEN, (data) => {
       this.callbacks.onWindowBroken?.(data);
     });
 
-    s.on('shot_fired', (data) => {
+    s.on(S2C.SHOT_FIRED, (data) => {
       const shooterEntry = this.remotePlayers.get(data.shooterId);
       if (shooterEntry) {
         shooterEntry.avatar.triggerFireEffect();
@@ -98,7 +99,7 @@ export class NetworkManager {
       this.callbacks.onShotFired?.(data);
     });
 
-    s.on('player_damaged', (data) => {
+    s.on(S2C.PLAYER_DAMAGED, (data) => {
       const targetEntry = this.remotePlayers.get(data.targetId);
       if (targetEntry) {
         targetEntry.hp = data.hp;
@@ -109,47 +110,47 @@ export class NetworkManager {
       this.callbacks.onPlayerDamaged?.(data);
     });
 
-    s.on('player_eliminated', (data) => {
+    s.on(S2C.PLAYER_ELIMINATED, (data) => {
       this.callbacks.onPlayerEliminated?.(data);
     });
 
-    s.on('wildlife_hit', (data) => {
+    s.on(S2C.WILDLIFE_HIT, (data) => {
       this.callbacks.onWildlifeHit?.(data);
     });
 
-    s.on('wildlife_aggro', (data) => {
+    s.on(S2C.WILDLIFE_AGGRO, (data) => {
       this.callbacks.onWildlifeAggro?.(data);
     });
 
-    s.on('wildlife_attack', (data) => {
+    s.on(S2C.WILDLIFE_ATTACK, (data) => {
       this.callbacks.onWildlifeAttack?.(data);
     });
 
-    s.on('wildlife_killed', (data) => {
+    s.on(S2C.WILDLIFE_KILLED, (data) => {
       this.callbacks.onWildlifeKilled?.(data);
     });
 
-    s.on('reload_complete', (data) => {
+    s.on(S2C.RELOAD_COMPLETE, (data) => {
       this.callbacks.onReloadComplete?.(data);
     });
 
-    s.on('heal_started', (data) => {
+    s.on(S2C.HEAL_STARTED, (data) => {
       this.callbacks.onHealStarted?.(data);
     });
 
-    s.on('heal_cancelled', (data) => {
+    s.on(S2C.HEAL_CANCELLED, (data) => {
       this.callbacks.onHealCancelled?.(data);
     });
 
-    s.on('player_healed', (data) => {
+    s.on(S2C.PLAYER_HEALED, (data) => {
       this.callbacks.onPlayerHealed?.(data);
     });
 
-    s.on('game_over', (data) => {
+    s.on(S2C.GAME_OVER, (data) => {
       this.callbacks.onGameOver?.(data);
     });
 
-    s.on('returned_to_lobby', () => {
+    s.on(S2C.RETURNED_TO_LOBBY, () => {
       this.clearRemoteAvatars();
       this.callbacks.onReturnedToLobby?.();
     });
@@ -440,7 +441,7 @@ export class NetworkManager {
     const steps = localPlayer.flushPendingNetworkSteps?.();
     if (localPlayer.state !== 'plane' && (!steps || steps.length === 0)) return;
 
-    this.socket.emit('player_input', {
+    this.socket.emit(C2S.PLAYER_INPUT, {
       yaw: localPlayer.yaw,
       pitch: localPlayer.pitch,
       steps: steps && steps.length > 0 ? steps : undefined
@@ -448,71 +449,71 @@ export class NetworkManager {
   }
 
   sendSlideState(active) {
-    this.socket.emit('player_slide', { active });
+    this.socket.emit(C2S.PLAYER_SLIDE, { active });
   }
 
   joinLobby(name) {
-    this.socket.emit('join_lobby', { name });
+    this.socket.emit(C2S.JOIN_LOBBY, { name });
   }
 
   configureBots(payload) {
-    this.socket.emit('configure_bots', payload);
+    this.socket.emit(C2S.CONFIGURE_BOTS, payload);
   }
 
   addBot() {
-    this.socket.emit('add_bot');
+    this.socket.emit(C2S.ADD_BOT);
   }
 
   clearBots() {
-    this.socket.emit('clear_bots');
+    this.socket.emit(C2S.CLEAR_BOTS);
   }
 
   startGame(options = {}) {
     if (typeof options === 'boolean') {
-      this.socket.emit('start_game', { autoFillBots: options });
+      this.socket.emit(C2S.START_GAME, { autoFillBots: options });
     } else {
-      this.socket.emit('start_game', options);
+      this.socket.emit(C2S.START_GAME, options);
     }
   }
 
   requestJump() {
-    this.socket.emit('player_jump');
+    this.socket.emit(C2S.PLAYER_JUMP);
   }
 
   requestShoot(payload) {
     // viewTime: instante del servidor que se veía en pantalla al disparar
-    this.socket.emit('player_shoot', { ...payload, viewTime: this.lastRenderTime ?? undefined });
+    this.socket.emit(C2S.PLAYER_SHOOT, { ...payload, viewTime: this.lastRenderTime ?? undefined });
   }
 
   requestReload() {
-    this.socket.emit('player_reload');
+    this.socket.emit(C2S.PLAYER_RELOAD);
   }
 
   requestSwitchWeapon(weapon) {
-    this.socket.emit('player_switch_weapon', { weapon });
+    this.socket.emit(C2S.PLAYER_SWITCH_WEAPON, { weapon });
   }
 
   requestHeal(itemType = 'medkit') {
-    this.socket.emit('player_heal', { itemType });
+    this.socket.emit(C2S.PLAYER_HEAL, { itemType });
   }
 
   cancelHeal() {
-    this.socket.emit('player_cancel_heal');
+    this.socket.emit(C2S.PLAYER_CANCEL_HEAL);
   }
 
   requestPickup(lootId) {
-    if (lootId) this.socket.emit('player_pickup', { lootId });
+    if (lootId) this.socket.emit(C2S.PLAYER_PICKUP, { lootId });
   }
 
   requestInteractDoor(doorId) {
-    if (doorId) this.socket.emit('player_interact_door', { doorId });
+    if (doorId) this.socket.emit(C2S.PLAYER_INTERACT_DOOR, { doorId });
   }
 
   requestBreakWindow(windowId) {
-    if (windowId) this.socket.emit('player_break_window', { windowId });
+    if (windowId) this.socket.emit(C2S.PLAYER_BREAK_WINDOW, { windowId });
   }
 
   resetLobby() {
-    this.socket.emit('reset_lobby');
+    this.socket.emit(C2S.RESET_LOBBY);
   }
 }

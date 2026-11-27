@@ -30,6 +30,7 @@ import { wildlifeMethods } from './room/wildlife.js';
 import { stormMethods } from './room/storm.js';
 import { lagCompensationMethods } from './room/lagCompensation.js';
 import { swimmingMethods } from './room/swimming.js';
+import { S2C, quantize } from '../shared/protocol.js';
 
 export class GameRoom {
   constructor(io) {
@@ -230,13 +231,13 @@ export class GameRoom {
           p.bandages -= 1;
           p.hp = Math.min(p.maxHp, p.hp + LOOT_TYPES.bandage.heal);
           if (!p.isBot) {
-            this.io.to(p.id).emit('player_healed', { hp: p.hp, medkits: p.medkits, bandages: p.bandages, itemType: 'bandage' });
+            this.io.to(p.id).emit(S2C.PLAYER_HEALED, { hp: p.hp, medkits: p.medkits, bandages: p.bandages, itemType: 'bandage' });
           }
         } else if (itemType === 'medkit' && p.medkits > 0 && p.hp < p.maxHp) {
           p.medkits -= 1;
           p.hp = Math.min(p.maxHp, p.hp + LOOT_TYPES.medkit.heal);
           if (!p.isBot) {
-            this.io.to(p.id).emit('player_healed', { hp: p.hp, medkits: p.medkits, bandages: p.bandages, itemType: 'medkit' });
+            this.io.to(p.id).emit(S2C.PLAYER_HEALED, { hp: p.hp, medkits: p.medkits, bandages: p.bandages, itemType: 'medkit' });
           }
         }
       }
@@ -253,7 +254,7 @@ export class GameRoom {
         p.reloadingUntil = 0;
         p.reloadWeapon = null;
         if (!p.isBot) {
-          this.io.to(p.id).emit('reload_complete', {
+          this.io.to(p.id).emit(S2C.RELOAD_COMPLETE, {
             weapon: p.equipped,
             weapons: p.weapons,
             reserveAmmo: p.reserveAmmo
@@ -297,15 +298,15 @@ export class GameRoom {
 
     this.recordPositionHistory(now);
 
-    this.io.emit('world_tick', {
+    this.io.emit(S2C.WORLD_TICK, {
       t: now, // hora del servidor (ms): el cliente interpola las entidades remotas con ella
       players: this.serializePlayers(),
       wildlife: this.serializeWildlife(),
       plane: this.plane,
       storm: {
-        centerX: Number(this.storm.centerX.toFixed(1)),
-        centerZ: Number(this.storm.centerZ.toFixed(1)),
-        radius: Number(this.storm.radius.toFixed(2)),
+        centerX: quantize(this.storm.centerX, 1),
+        centerZ: quantize(this.storm.centerZ, 1),
+        radius: quantize(this.storm.radius, 2),
         targetRadius: this.storm.targetRadius,
         state: this.storm.state,
         timer: Math.ceil(this.storm.timer),
@@ -326,27 +327,27 @@ export class GameRoom {
         isBot: p.isBot,
         colorIdx: p.colorIdx,
         seatIndex: p.seatIndex || 0,
-        cabinProgress: Number((p.cabinProgress || 0).toFixed(3)),
+        cabinProgress: quantize(p.cabinProgress || 0, 3),
         alive: p.alive,
         hp: p.hp,
         maxHp: p.maxHp,
         kills: p.kills,
         state: p.state,
-        x: Number(p.x.toFixed(3)),
-        y: Number(p.y.toFixed(3)),
-        z: Number(p.z.toFixed(3)),
-        vx: Number((p.vx || 0).toFixed(3)),
-        vz: Number((p.vz || 0).toFixed(3)),
-        vy: Number((p.vy || 0).toFixed(3)),
+        x: quantize(p.x, 3),
+        y: quantize(p.y, 3),
+        z: quantize(p.z, 3),
+        vx: quantize(p.vx || 0, 3),
+        vz: quantize(p.vz || 0, 3),
+        vy: quantize(p.vy || 0, 3),
         lastSeq: p.lastProcessedSeq || 0,
-        yaw: Number(p.yaw.toFixed(3)),
-        pitch: Number(p.pitch.toFixed(3)),
+        yaw: quantize(p.yaw, 3),
+        pitch: quantize(p.pitch, 3),
         onGround: Boolean(p.onGround),
-        animWalk: Number(p.animWalk.toFixed(2)),
+        animWalk: quantize(p.animWalk, 2),
         moveMode: p.moveMode || 'idle',
         isSliding: Boolean(p.isSliding),
         isCrouching: Boolean(p.isCrouching),
-        jumpAltitude: Number((p.jumpAltitude || PARACHUTE_CONFIG.planeHeightAboveValley).toFixed(1)),
+        jumpAltitude: quantize(p.jumpAltitude || PARACHUTE_CONFIG.planeHeightAboveValley, 1),
         equipped: p.equipped,
         mag: p.weapons[p.equipped] ? p.weapons[p.equipped].mag : 0,
         reserveAmmo: p.reserveAmmo,

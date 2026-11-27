@@ -30,9 +30,13 @@ const IGNORED_CONSOLE = [
 
 function startServer() {
   const port = 3300 + Math.floor(Math.random() * 600);
+  // Playwright fija FORCE_COLOR; si el entorno trae NO_COLOR, Node avisa por stderr y la prueba lo tomaría por
+  // un error del servidor. Se quita solo NO_COLOR del proceso hijo.
+  const env = { ...process.env, PORT: String(port) };
+  delete env.NO_COLOR;
   const proc = spawn(process.execPath, ['server/index.js'], {
     cwd: ROOT,
-    env: { ...process.env, PORT: String(port) },
+    env,
     stdio: ['ignore', 'pipe', 'pipe']
   });
   const log = { stdout: '', stderr: '', exitCode: null };
@@ -75,8 +79,9 @@ async function openClient(browser, port, name) {
   await page.evaluate(() => {
     const c = window.__cocoro;
     const e2e = (window.__e2e = { lastMe: null, pickups: 0, shots: 0, frames: [], drawCalls: [], recording: false });
-    c.net.socket.on('world_tick', (s) => {
-      const me = s.players?.[c.net.selfId];
+    // El cable va compacto (shared/snapshotCodec.js): se lee el snapshot ya decodificado por el cliente
+    c.net.socket.on('world_tick', () => {
+      const me = c.net.lastWorldTick?.players?.[c.net.selfId];
       if (me) e2e.lastMe = { x: me.x, y: me.y, z: me.z, state: me.state, t: performance.now() };
     });
     c.net.socket.on('loot_picked', (d) => { if (d.playerId === c.net.selfId) e2e.pickups++; });
@@ -139,21 +144,43 @@ async function settledSyncError(page) {
 }
 
 // Orienta la vista hacia el botín más cercano (los puños recogen al pasar por encima)
-const aimAtNearestLoot = (page) =>
-  page.evaluate(() => {
+// Orienta la vista hacia el botín alcanzable más cercano (los puños recogen al pasar por encima). Si un objetivo
+// no se acerca en ~2 s (dentro de un edificio cerrado, tras un barranco…) se descarta y se elige el siguiente.
+// `lane` (0/1) reparte el botín entre los dos clientes por paridad del id: aterrizan juntos y, si persiguen el
+// mismo objeto, el que llega segundo se queda sin nada.
+const aimAtNearestLoot = (page, lane) =>
+  page.evaluate((laneInPage) => {
     const c = window.__cocoro;
     const p = c.localPlayer;
+    const e2e = window.__e2e;
+    e2e.skipLoot ??= new Set();
     let best = null;
     let bestD = Infinity;
-    for (const item of c.world.lootItemsData.values()) {
-      const d = Math.hypot(item.x - p.x, item.z - p.z);
-      if (d < bestD) { bestD = d; best = item; }
+    for (const pass of [true, false]) {
+      for (const item of c.world.lootItemsData.values()) {
+        if (e2e.skipLoot.has(item.id)) continue;
+        if (pass && (parseInt(String(item.id).replace(/\D/g, ''), 10) || 0) % 2 !== laneInPage) continue;
+        const d = Math.hypot(item.x - p.x, item.z - p.z);
+        if (d < bestD) { bestD = d; best = item; }
+      }
+      if (best && bestD < 60) break; // en la pasada libre se acepta cualquier objeto
     }
     if (!best) return null;
-    p.yaw = Math.atan2(-(best.x - p.x), -(best.z - p.z));
+    const track = e2e.lootTrack;
+    if (!track || track.id !== best.id) {
+      e2e.lootTrack = { id: best.id, bestD, since: performance.now() };
+    } else if (bestD < track.bestD - 0.5) {
+      track.bestD = bestD;
+      track.since = performance.now();
+    } else if (performance.now() - track.since > 2000) {
+      e2e.skipLoot.add(best.id);
+      e2e.lootTrack = null;
+    }
+    // W avanza en (sin(yaw), cos(yaw)): ver client/js/player/controller.js
+    p.yaw = Math.atan2(best.x - p.x, best.z - p.z);
     p.pitch = -0.1;
     return bestD;
-  });
+  }, lane);
 
 test('LAN: 2 clientes + bots, 30 s de juego sin errores, sincronizados y dentro de presupuesto', async ({ browser }) => {
   const server = startServer();
@@ -188,18 +215,18 @@ test('LAN: 2 clientes + bots, 30 s de juego sin errores, sincronizados y dentro 
     const movingErrors = clients.map(() => []);
     const playOne = async (c, idx) => {
       let lastLootD = Infinity;
-      let flip = false;
       while (Date.now() - t0 < ACTIVE_PLAY_MS) {
         const elapsed = Date.now() - t0;
         if (elapsed < ACTIVE_PLAY_MS * 0.55) {
-          // Fase botín: caminar/correr hacia el botín más cercano
-          const d = await aimAtNearestLoot(c.page);
-          if (d !== null && d > lastLootD + 0.5) flip = !flip;
-          if (flip) await c.page.evaluate(() => { window.__cocoro.localPlayer.yaw += Math.PI; });
-          lastLootD = d ?? Infinity;
+          // Fase botín: caminar/correr hacia el botín más cercano; E lo recoge a <= 3.6 m (los puños además lo
+          // recogen solos al pasar por encima) y un salto supera el obstáculo si el avance se atasca
+          const d = await aimAtNearestLoot(c.page, idx % 2);
           await c.page.keyboard.down('KeyW');
           if (d !== null && d > 8) await c.page.keyboard.down('ShiftLeft');
           else await c.page.keyboard.up('ShiftLeft');
+          if (d !== null && d < 3.4) await c.page.keyboard.press('KeyE');
+          else if (d !== null && d > lastLootD - 0.3) await c.page.keyboard.press('Space');
+          lastLootD = d ?? Infinity;
           await c.page.waitForTimeout(400);
         } else {
           // Fase combate: moverse en zigzag, saltar, mirar y disparar
@@ -246,6 +273,7 @@ test('LAN: 2 clientes + bots, 30 s de juego sin errores, sincronizados y dentro 
           drawCallsP95: dc[Math.floor(dc.length * 0.95)] || 0,
           drawCallsMax: dc[dc.length - 1] || 0,
           pickups: window.__e2e.pickups,
+          lootSkipped: window.__e2e.skipLoot?.size ?? 0,
           shots: window.__e2e.shots,
           state: window.__cocoro.localPlayer.state,
           alive: window.__cocoro.localPlayer.alive,

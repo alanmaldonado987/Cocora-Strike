@@ -22,6 +22,7 @@ import {
   getWaterDepthAt,
   isSwimmingAt,
   getSwimFloatY,
+  resolveSlidingHorizontal,
   stepCharacterPhysics,
   findVaultableObstacle
 } from '../physics.js';
@@ -175,6 +176,218 @@ function clipVelocityAgainstCollision(state, desiredX, desiredZ) {
     state.vx -= intoWall * nx;
     state.vz -= intoWall * nz;
   }
+}
+
+// Comprueba que la cápsula completa [footY + 0.05, footY + height] esté libre de techos y muros sólidos
+export function hasCapsuleClearance(map, x, footY, z, radius = PLAYER_RADIUS, height = PLAYER_HEIGHT) {
+  if (!map?.colliders) return true;
+  const yBottom = footY + 0.05;
+  const yTop = footY + height - 0.01;
+  const rCheck = radius * 0.92;
+  const nearby = map.colliders.queryNear(x, z, rCheck + 0.5);
+
+  for (let i = 0; i < nearby.length; i++) {
+    const c = nearby[i];
+    if (c.enabled === false) continue;
+    if (yTop <= c.minY || yBottom >= c.maxY) continue;
+    if (c.type === 'cylinder') {
+      const dx = x - c.x;
+      const dz = z - c.z;
+      const minD = rCheck + c.r;
+      if (dx * dx + dz * dz < minD * minD) return false;
+    } else if (c.type === 'box') {
+      const cx = Math.max(c.minX, Math.min(c.maxX, x));
+      const cz = Math.max(c.minZ, Math.min(c.maxZ, z));
+      const dx = x - cx;
+      const dz = z - cz;
+      if (dx * dx + dz * dz < rCheck * rCheck) return false;
+    }
+  }
+  return true;
+}
+
+// Obtiene la superficie de soporte bajo los pies incluyendo escalones/bordillos sólidos hasta maxReachAboveFeet
+function querySupportSurfaceY(map, wx, wy, wz, radius = PLAYER_RADIUS, maxReachAboveFeet = 0.10) {
+  let bestY = map.getFloorBelowY(wx, wy + maxReachAboveFeet, wz);
+  if (!map?.colliders) return bestY;
+
+  const footR = radius;
+  const near = map.colliders.queryNear(wx, wz, footR + 0.35);
+  for (let i = 0; i < near.length; i++) {
+    const c = near[i];
+    if (c.enabled === false) continue;
+    if (c.maxY > wy + maxReachAboveFeet || c.maxY <= bestY) continue;
+    if (c.type === 'box') {
+      const cx = Math.max(c.minX, Math.min(c.maxX, wx));
+      const cz = Math.max(c.minZ, Math.min(c.maxZ, wz));
+      const dx = wx - cx;
+      const dz = wz - cz;
+      if (dx * dx + dz * dz <= footR * footR) {
+        bestY = c.maxY;
+      }
+    } else if (c.type === 'cylinder') {
+      const dx = wx - c.x;
+      const dz = wz - c.z;
+      const rSum = c.r + footR;
+      if (dx * dx + dz * dz <= rSum * rSum) {
+        bestY = c.maxY;
+      }
+    }
+  }
+  return bestY;
+}
+
+// Integrador horizontal + vertical con subida automática de escalones (stepUp <= 0.45 m) y adhesión en bajadas (snapToGround)
+function integrateGroundAirMotor(map, state, dt, radius, height, wasOnGround, jumpedThisTick, ev, cfg = MOVEMENT_CONFIG) {
+  const startX = state.x;
+  const startY = state.y;
+  const startZ = state.z;
+  const desiredX = startX + state.vx * dt;
+  const desiredZ = startZ + state.vz * dt;
+
+  const curGround = map.getGroundHeightAt(startX, startZ, startY);
+  const nextGround = map.getGroundHeightAt(desiredX, desiredZ, startY + cfg.maxStepHeight);
+  let targetX = desiredX;
+  let targetZ = desiredZ;
+
+  const stepDist = Math.hypot(desiredX - startX, desiredZ - startZ);
+  const terrainRise = nextGround - curGround;
+  if (
+    state.onGround &&
+    stepDist > 0.001 &&
+    terrainRise > cfg.maxStepHeight &&
+    terrainRise / stepDist > cfg.maxWalkableSlope
+  ) {
+    const gxOnly = map.getGroundHeightAt(desiredX, startZ, startY);
+    const gzOnly = map.getGroundHeightAt(startX, desiredZ, startY);
+    const rx = gxOnly - curGround;
+    const rz = gzOnly - curGround;
+    if (rx < rz && (rx <= cfg.maxStepHeight || rx / (Math.abs(desiredX - startX) || 1) <= cfg.maxWalkableSlope)) {
+      targetZ = startZ;
+    } else if (rz <= cfg.maxStepHeight || rz / (Math.abs(desiredZ - startZ) || 1) <= cfg.maxWalkableSlope) {
+      targetX = startX;
+    } else {
+      targetX = startX;
+      targetZ = startZ;
+    }
+  }
+
+  const slidLow = resolveSlidingHorizontal(map, targetX, startY, targetZ, radius, height);
+  let finalX = slidLow.x;
+  let finalZ = slidLow.z;
+  let steppedUp = false;
+
+  const horizSpeed = Math.hypot(state.vx, state.vz);
+  const canAttemptStep = (wasOnGround || state.onGround || state.vy <= 0) && !jumpedThisTick && horizSpeed >= cfg.stepMinHorizSpeed;
+
+  // Caso A: un obstáculo bloqueó el avance horizontal en startY -> probar elevar hasta maxStepHeight (0.45 m)
+  const lowBlockedDist = Math.hypot(slidLow.x - targetX, slidLow.z - targetZ);
+  if (canAttemptStep && lowBlockedDist > 0.004) {
+    const testHighY = startY + cfg.maxStepHeight;
+    const slidHigh = resolveSlidingHorizontal(map, targetX, testHighY, targetZ, radius, height);
+    const highBlockedDist = Math.hypot(slidHigh.x - targetX, slidHigh.z - targetZ);
+
+    if (highBlockedDist + 0.008 < lowBlockedDist) {
+      const moveDirLen = Math.hypot(targetX - startX, targetZ - startZ) || 1;
+      const dirX = (targetX - startX) / moveDirLen;
+      const dirZ = (targetZ - startZ) / moveDirLen;
+      const probeX = slidHigh.x + dirX * 0.12;
+      const probeZ = slidHigh.z + dirZ * 0.12;
+      const candSurfaceY = Math.max(
+        querySupportSurfaceY(map, slidHigh.x, startY, slidHigh.z, radius + 0.02, cfg.maxStepHeight + 0.02),
+        querySupportSurfaceY(map, probeX, startY, probeZ, radius, cfg.maxStepHeight + 0.02)
+      );
+      const stepDelta = candSurfaceY - startY;
+      if (
+        stepDelta > 0.01 &&
+        stepDelta <= cfg.maxStepHeight + 1e-4 &&
+        hasCapsuleClearance(map, slidHigh.x, candSurfaceY, slidHigh.z, radius, height) &&
+        hasCapsuleClearance(map, probeX, candSurfaceY, probeZ, radius, height)
+      ) {
+        finalX = slidHigh.x;
+        finalZ = slidHigh.z;
+        state.x = finalX;
+        state.z = finalZ;
+        state.y = candSurfaceY;
+        state.vy = 0;
+        state.onGround = true;
+        ev.stepUpDeltaY = stepDelta;
+        steppedUp = true;
+      }
+    }
+  }
+
+  // Caso B: escalón bajo (< 0.38 m) que no bloqueó yBottom pero eleva el piso bajo los pies
+  if (!steppedUp && canAttemptStep) {
+    const lowStepSurfaceY = querySupportSurfaceY(map, finalX, startY, finalZ, radius, cfg.maxStepHeight + 0.01);
+    const lowDelta = lowStepSurfaceY - startY;
+    if (lowDelta > 0.015 && lowDelta <= cfg.maxStepHeight + 1e-4) {
+      if (hasCapsuleClearance(map, finalX, lowStepSurfaceY, finalZ, radius, height)) {
+        state.x = finalX;
+        state.z = finalZ;
+        state.y = lowStepSurfaceY;
+        state.vy = 0;
+        state.onGround = true;
+        ev.stepUpDeltaY = lowDelta;
+        steppedUp = true;
+      } else {
+        // Sin espacio libre de techo sobre el escalón: impedir penetrar bajo el techo bajo
+        finalX = startX;
+        finalZ = startZ;
+      }
+    }
+  }
+
+  if (!steppedUp) {
+    state.x = finalX;
+    state.z = finalZ;
+
+    const minTerrainY = map.getTerrainHeightAt
+      ? map.getTerrainHeightAt(state.x, state.z)
+      : map.getGroundHeightAt(state.x, state.z, state.y);
+
+    const supportY = querySupportSurfaceY(map, state.x, state.y, state.z, radius, 0.10);
+    state.vy = (state.vy || 0) - cfg.gravity * dt;
+    let nextY = state.y + state.vy * dt;
+
+    // Colisión vertical de cabeza contra techos al subir saltando
+    if (state.vy > 0 && map.colliders) {
+      const near = map.colliders.queryNear(state.x, state.z, radius);
+      const headTop = nextY + height;
+      for (let i = 0; i < near.length; i++) {
+        const c = near[i];
+        if (c.enabled === false) continue;
+        if (c.type === 'box' && state.x >= c.minX - radius * 0.6 && state.x <= c.maxX + radius * 0.6 && state.z >= c.minZ - radius * 0.6 && state.z <= c.maxZ + radius * 0.6) {
+          if (state.y + height <= c.minY + 0.22 && headTop >= c.minY) {
+            state.vy = 0;
+            nextY = c.minY - height - 0.02;
+            break;
+          }
+        }
+      }
+    }
+
+    if (state.vy <= 0 && nextY <= supportY + 0.09) {
+      state.y = supportY;
+      state.vy = 0;
+      state.onGround = true;
+    } else if (wasOnGround && !jumpedThisTick && state.vy <= 0 && state.y - supportY <= cfg.groundSnapDist && state.y >= supportY - 0.08) {
+      // snapToGround: adhesión continua al bajar escaleras, puentes y pendientes pronunciadas sin rebotar
+      state.y = supportY;
+      state.vy = 0;
+      state.onGround = true;
+    } else {
+      state.y = Math.max(minTerrainY, nextY);
+      if (state.y <= minTerrainY + 0.001 && state.vy < 0) {
+        state.vy = 0;
+        state.onGround = true;
+      } else {
+        state.onGround = false;
+      }
+    }
+  }
+
+  clipVelocityAgainstCollision(state, desiredX, desiredZ);
 }
 
 export function stepPlayer(state, input, dt, map, options = {}) {
@@ -361,6 +574,18 @@ export function stepPlayer(state, input, dt, map, options = {}) {
   const prevY = state.y;
   const prevZ = state.z;
 
+  // Ventanas de Coyote Time (~100 ms tras dejar borde) y Jump Buffering (~120 ms antes de tocar suelo)
+  if (wasOnGround) {
+    state.coyoteTimer = MOVEMENT_CONFIG.coyoteTimeSec;
+  } else {
+    state.coyoteTimer = Math.max(0, (state.coyoteTimer || 0) - dt);
+  }
+  if (jumpJustPressed) {
+    state.jumpBufferTimer = MOVEMENT_CONFIG.jumpBufferTimeSec;
+  } else {
+    state.jumpBufferTimer = Math.max(0, (state.jumpBufferTimer || 0) - dt);
+  }
+
   const swimmingNow = !state.isVaulting && isSwimmingAt(map, state.x, state.y, state.z);
   if (swimmingNow) {
     if (!state.isSwimming) {
@@ -429,68 +654,59 @@ export function stepPlayer(state, input, dt, map, options = {}) {
     }
   }
 
-  // Activación de salto / vaulting / reapertura de paracaídas en altura
-  if (!state.isVaulting && jumpJustPressed) {
-    if (state.onGround) {
-      const fwdX = Math.sin(state.yaw);
-      const fwdZ = Math.cos(state.yaw);
-      const pressingForward = wishX * fwdX + wishZ * fwdZ > 0.45;
-      const vaultTarget = pressingForward
+  // Activación de salto (suelo + coyote time + jump buffer) / vaulting / paracaídas en altura
+  const canCoyoteOrGroundJump = state.onGround || state.coyoteTimer > 0;
+  if (!state.isVaulting && state.jumpBufferTimer > 0 && canCoyoteOrGroundJump) {
+    const fwdX = Math.sin(state.yaw);
+    const fwdZ = Math.cos(state.yaw);
+    const pressingForward = wishX * fwdX + wishZ * fwdZ > 0.45;
+    const vaultTarget =
+      state.onGround && pressingForward
         ? findVaultableObstacle(map, state.x, state.y, state.z, state.yaw)
         : null;
 
-      if (vaultTarget) {
-        if (state.isSliding) {
-          state.isSliding = false;
-          state.slideTimer = 0;
-          ev.slideEnded = true;
-        }
-        state.isCrouching = false;
-        if (state.isHealing) ev.cancelHeal = true;
-        state.isVaulting = true;
-        state.vaultTimer = 0;
-        state.vaultDuration = 0.42;
-        state.vaultStartX = state.x;
-        state.vaultStartY = state.y;
-        state.vaultStartZ = state.z;
-        state.vaultEndX = vaultTarget.endX;
-        state.vaultEndY = vaultTarget.endY;
-        state.vaultEndZ = vaultTarget.endZ;
-        state.vaultApexY = vaultTarget.apexY;
-        state.vy = 0;
-        state.onGround = false;
-        state.moveMode = 'vault';
-        ev.vaultStarted = true;
-        ev.vaultBreakWindowId = vaultTarget.breakWindowId || null;
-      } else {
-        if (state.isSliding) {
-          state.isSliding = false;
-          state.slideTimer = 0;
-          ev.slideEnded = true;
-        }
-        state.isCrouching = false;
-        if (state.isHealing) ev.cancelHeal = true;
-        // Conserva íntegramente el impulso horizontal (state.vx, state.vz) al despegar
-        state.vy = MOVEMENT_CONFIG.jumpVelocity;
-        state.onGround = false;
-        state.airPeakY = state.y;
-        ev.jumped = true;
+    if (vaultTarget) {
+      if (state.isSliding) {
+        state.isSliding = false;
+        state.slideTimer = 0;
+        ev.slideEnded = true;
       }
-    } else if (
-      !state.onGround &&
-      state.currentGroundClearance >= PARACHUTE_CONFIG.minClearanceToOpen &&
-      (state.airPeakY ?? state.y) - (state.y - state.currentGroundClearance) >= PARACHUTE_CONFIG.minJumpHeightRef
-    ) {
-      const floorY = state.y - state.currentGroundClearance;
-      state.jumpStartAltitude = Math.max(PARACHUTE_CONFIG.minJumpHeightRef, (state.airPeakY ?? state.y) - floorY);
-      state.currentDescentSpeed = Math.max(4, -state.vy);
-      state.state = 'parachuting';
+      state.isCrouching = false;
+      if (state.isHealing) ev.cancelHeal = true;
+      state.isVaulting = true;
+      state.vaultTimer = 0;
+      state.vaultDuration = 0.42;
+      state.vaultStartX = state.x;
+      state.vaultStartY = state.y;
+      state.vaultStartZ = state.z;
+      state.vaultEndX = vaultTarget.endX;
+      state.vaultEndY = vaultTarget.endY;
+      state.vaultEndZ = vaultTarget.endZ;
+      state.vaultApexY = vaultTarget.apexY;
+      state.vy = 0;
+      state.onGround = false;
+      state.coyoteTimer = 0;
+      state.jumpBufferTimer = 0;
+      state.moveMode = 'vault';
+      ev.vaultStarted = true;
+      ev.vaultBreakWindowId = vaultTarget.breakWindowId || null;
+    } else {
+      if (state.isSliding) {
+        state.isSliding = false;
+        state.slideTimer = 0;
+        ev.slideEnded = true;
+      }
+      state.isCrouching = false;
+      if (state.isHealing) ev.cancelHeal = true;
+      // Conserva el impulso horizontal (state.vx, state.vz) y consume coyote + buffer
+      state.vy = MOVEMENT_CONFIG.jumpVelocity;
+      state.onGround = false;
+      state.coyoteTimer = 0;
+      state.jumpBufferTimer = 0;
       state.airPeakY = state.y;
-      ev.parachuteOpened = true;
-      return ev;
+      ev.jumped = true;
     }
-  } else if (!state.onGround && parachutePressed && !jumpJustPressed) {
-    // Tecla dedicada de paracaídas en caída desde risco/puente alto
+  } else if (!state.isVaulting && !state.onGround && state.coyoteTimer <= 0 && (jumpJustPressed || parachutePressed)) {
     if (
       state.currentGroundClearance >= PARACHUTE_CONFIG.minClearanceToOpen &&
       (state.airPeakY ?? state.y) - (state.y - state.currentGroundClearance) >= PARACHUTE_CONFIG.minJumpHeightRef
@@ -499,6 +715,7 @@ export function stepPlayer(state, input, dt, map, options = {}) {
       state.jumpStartAltitude = Math.max(PARACHUTE_CONFIG.minJumpHeightRef, (state.airPeakY ?? state.y) - floorY);
       state.currentDescentSpeed = Math.max(4, -state.vy);
       state.state = 'parachuting';
+      state.jumpBufferTimer = 0;
       state.airPeakY = state.y;
       ev.parachuteOpened = true;
       return ev;
@@ -560,16 +777,7 @@ export function stepPlayer(state, input, dt, map, options = {}) {
 
     const desiredX = state.x + state.vx * dt;
     const desiredZ = state.z + state.vz * dt;
-    stepCharacterPhysics(
-      map,
-      state,
-      state.vx,
-      state.vz,
-      dt,
-      MOVEMENT_CONFIG.gravity,
-      PLAYER_RADIUS,
-      PLAYER_SLIDE_HEIGHT
-    );
+    integrateGroundAirMotor(map, state, dt, PLAYER_RADIUS, PLAYER_SLIDE_HEIGHT, wasOnGround, ev.jumped, ev, MOVEMENT_CONFIG);
     clipVelocityAgainstCollision(state, desiredX, desiredZ);
 
     if (state.slideTimer <= 0 || !state.onGround) {
@@ -608,12 +816,9 @@ export function stepPlayer(state, input, dt, map, options = {}) {
     accelerateHorizontal(state, wishX, wishZ, airWishCap, MOVEMENT_CONFIG.airAccel, dt);
   }
 
-  const desiredX = state.x + state.vx * dt;
-  const desiredZ = state.z + state.vz * dt;
-  stepCharacterPhysics(map, state, state.vx, state.vz, dt, MOVEMENT_CONFIG.gravity, PLAYER_RADIUS, effH);
-  clipVelocityAgainstCollision(state, desiredX, desiredZ);
+  integrateGroundAirMotor(map, state, dt, PLAYER_RADIUS, effH, wasOnGround, ev.jumped, ev, MOVEMENT_CONFIG);
 
-  const floorY = map.getFloorBelowY(state.x, state.y + 0.35, state.z);
+  const floorY = querySupportSurfaceY(map, state.x, state.y, state.z, PLAYER_RADIUS, 0.35);
   state.currentGroundClearance = Math.max(0, state.y - floorY);
 
   const moved = Math.hypot(state.x - prevX, state.z - prevZ);
@@ -628,6 +833,7 @@ export function stepPlayer(state, input, dt, map, options = {}) {
     }
     state.moveMode = state.vy > 0.6 ? 'jump' : 'fall';
   } else {
+    state.coyoteTimer = MOVEMENT_CONFIG.coyoteTimeSec;
     if (!wasOnGround) {
       ev.landed = true;
       ev.landingImpactSpeed = Math.max(0, -preVy);
@@ -636,7 +842,15 @@ export function stepPlayer(state, input, dt, map, options = {}) {
     }
     state.airPeakY = state.y;
 
-    if (horizSpeed > 0.25 && moved > 0.002 * (dt / (1 / 60))) {
+    // Jump Buffering: si se pulsó salto <= 120 ms antes de tocar tierra, despegar al instante
+    if (!wasOnGround && state.jumpBufferTimer > 0) {
+      state.vy = MOVEMENT_CONFIG.jumpVelocity;
+      state.onGround = false;
+      state.coyoteTimer = 0;
+      state.jumpBufferTimer = 0;
+      ev.jumped = true;
+      state.moveMode = 'jump';
+    } else if (horizSpeed > 0.25 && moved > 0.002 * (dt / (1 / 60))) {
       const speedRatio = Math.min(1.35, horizSpeed / Math.max(1, baseSpeed));
       const baseFreq = sprinting ? 13 : state.isCrouching ? 7 : 9.5;
       state.walkPhase += dt * baseFreq * Math.max(0.45, speedRatio);

@@ -501,3 +501,13 @@ export function computeTargetDescentSpeed(jumpAltitude, state, pitch = 0, cfg = 
   }
   return Math.max(13.5, baseFreefall + pitchAdjust);
 }
+
+// ==================== FASE 4: CPU, MEMORIA, SERVIDOR Y AUDIO ====================
+
+export const SPATIAL_GRID_CONFIG = {
+  coordOffset: 512,           // Desplazamiento entero para soportar celdas negativas [-512, +511] sin colisión
+  coordShift: 10,             // Desplazamiento bit a bit (equivalente a * 1024 en entero Smi sin HeapNumber)
+  coordStride: 1024,          // Multiplicador entero por fila (2^10)
+  maxStamp: 0x7fffffff        // Tope entero Smi de 31 bits antes de reiniciar queryStamp en colisionadores
+};
+

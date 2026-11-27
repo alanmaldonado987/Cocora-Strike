@@ -6,7 +6,7 @@
 // - Soporte para animación canalizada de curación (2.0s) con partículas verdes ascendentes
 
 import { CABIN_DISEMBARK_MS, ANIMATION_FEEL_CONFIG } from '/shared/mapData.js';
-import { createVoxelAvatar } from '../player.js';
+import { createVoxelAvatar } from '../player/avatar.js';
 import { ServerClock, SnapshotBuffer, createSampleOut } from './interpolation.js';
 
 const _sample = createSampleOut();

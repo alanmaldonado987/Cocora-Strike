@@ -9,7 +9,7 @@ import {
   applyAvatarOpacity,
   applyActiveWeaponVisibility,
   readMuzzleWorldPosition
-} from '../client/js/avatarPerf.js';
+} from '../client/js/player/avatarPerf.js';
 
 test('prepareAvatarMaterialsForFade y applyAvatarOpacity nunca activan needsUpdate ni alternan transparent en combate', () => {
   const mats = [

@@ -13,7 +13,7 @@ import {
 } from '/shared/mapData.js';
 import { SoundEngine } from './audio/audio.js';
 import { VoxelWorld } from './world.js';
-import { LocalPlayerController } from './player.js';
+import { LocalPlayerController } from './player/controller.js';
 import { requestRawPointerLock } from './core/input.js';
 import { createRenderer, createGpuWarmUp } from './core/quality.js';
 import { createFrameLoop } from './core/loop.js';

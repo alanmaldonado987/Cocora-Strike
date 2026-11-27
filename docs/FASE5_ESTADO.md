@@ -34,7 +34,7 @@ Regla: **extraer y organizar código sin cambiar comportamiento**. Un dominio po
 - [x] `audio/` — audio.js
 - [x] `ui/` — hud.js, minimap.js, lobby.js, killfeed.js (+ `elements.js` con el mapa de nodos DOM y `hudUpdater.js` movido desde `client/js/`)
 - [x] `core/` — loop.js (paso fijo), quality.js, input.js (+ `mixin.js`; el paso fijo SIM_DT=1/60 sigue en el controlador del jugador y se documenta en `loop.js`)
-- [ ] `player/` — avatar.js, animation.js, viewmodel.js, camera.js, controller.js, weapons.js
+- [x] `player/` — avatar.js, animation.js, viewmodel.js, camera.js, controller.js, weapons.js (métodos del controlador repartidos como mixins; `animate` del avatar vía `createAvatarAnimator`)
 - [ ] `world/` — terrain.js, foliage.js, structures.js, water.js, sky.js, lights.js, effects.js, loot.js, wildlife.js, materials.js
 
 ### 2. Shared (`shared/`)
@@ -63,3 +63,4 @@ Regla: **extraer y organizar código sin cambiar comportamiento**. Un dominio po
 | audio | `client/js/audio.js` → `client/js/audio/audio.js`; imports en `main.js` y `test/audioEngine.test.js` | 82 pruebas |
 | ui | `client/js/ui/{elements,hud,hudUpdater,minimap,lobby,killfeed}.js` (fábricas con dependencias inyectadas); `main.js` delega HUD, minimapa, killfeed, lobby y pantalla final; `test/hudPerf.test.js` | 82 pruebas; humo OK |
 | core | `client/js/core/{loop,quality,input}.js`; `main.js` usa `createRenderer`, `createGpuWarmUp`, `createFrameLoop`; `bindInputs`/`clearActiveInputs`/`requestRawPointerLock` salen de `player.js` | 82 pruebas; humo OK |
+| player | `client/js/player.js` → `client/js/player/{avatar,animation,viewmodel,camera,controller,weapons,avatarPerf}.js`; `damp` unificado en `shared/math.js`; imports en `main.js`, `net/network.js`, `ui/lobby.js`, `world.js`, `test/playerZeroAlloc.test.js` | 82 pruebas; humo OK (salto, paracaídas, W, cambio de cámara) |

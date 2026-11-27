@@ -33,6 +33,14 @@ export function smoothstep(t) {
 }
 
 /**
+ * Amortiguación exponencial independiente de los FPS: acerca `current` a `target` con tasa `lambda` (1/s).
+ * (Antes duplicada en client/js/player.js y client/js/world.js.)
+ */
+export function damp(current, target, lambda, dt) {
+  return current + (target - current) * (1 - Math.exp(-lambda * dt));
+}
+
+/**
  * Resorte armónico críticamente amortiguado (ζ = 1.0) exacto e incondicionalmente estable.
  * Muta `state` ({ value, vel }) hacia `target` con frecuencia angular natural `omega` (rad/s)
  * sin sobreoscilación e independiente de los FPS.

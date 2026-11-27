@@ -1,4 +1,4 @@
-// client/js/avatarPerf.js
+// client/js/player/avatarPerf.js
 // Operaciones sin allocaciones ni recompilación de shaders en combate para avatares y armas (player.js).
 
 /**

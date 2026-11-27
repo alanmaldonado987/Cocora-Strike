@@ -1,7 +1,7 @@
 // client/js/ui/lobby.js
 // Sala de espera LAN (lista de jugadores, bots, avión, cuenta regresiva), controles del lobby y pantalla final.
 
-import { AVATAR_COLORS } from '../player.js';
+import { AVATAR_COLORS } from '../player/avatar.js';
 import { escapeHtml } from './elements.js';
 
 /**

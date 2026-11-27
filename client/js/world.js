@@ -23,7 +23,8 @@ import {
   getWaterProfileAt,
   generateCocoraMap
 } from '/shared/mapData.js';
-import { createDetailedWeaponMesh, getSharedToonGradient } from './player.js';
+import { createDetailedWeaponMesh } from './player/weapons.js';
+import { getSharedToonGradient } from './player/avatar.js';
 import { ServerClock, SnapshotBuffer, createSampleOut } from './net/interpolation.js';
 import { GroundCover } from './groundCover.js';
 import {

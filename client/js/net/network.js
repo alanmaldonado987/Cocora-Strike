@@ -1,4 +1,4 @@
-// client/js/network.js
+// client/js/net/network.js
 // Cliente Socket.IO optimizado (desacopla ticks del servidor a 20 Hz del renderizado a 60+ FPS):
 // - Interpolación de snapshots con retardo fijo (interpolation.js): los jugadores remotos se dibujan
 //   ~100 ms en el pasado entre los dos snapshots del servidor que rodean ese instante, sin tirones
@@ -6,7 +6,7 @@
 // - Soporte para animación canalizada de curación (2.0s) con partículas verdes ascendentes
 
 import { CABIN_DISEMBARK_MS, ANIMATION_FEEL_CONFIG } from '/shared/mapData.js';
-import { createVoxelAvatar } from './player.js';
+import { createVoxelAvatar } from '../player.js';
 import { ServerClock, SnapshotBuffer, createSampleOut } from './interpolation.js';
 
 const _sample = createSampleOut();

@@ -23,7 +23,7 @@ import {
 import { SoundEngine } from './audio.js';
 import { VoxelWorld } from './world.js';
 import { AVATAR_COLORS, LocalPlayerController, requestRawPointerLock } from './player.js';
-import { NetworkManager } from './network.js';
+import { NetworkManager } from './net/network.js';
 import {
   createHudCache,
   resetHudCache,

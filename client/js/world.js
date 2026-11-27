@@ -24,7 +24,7 @@ import {
   generateCocoraMap
 } from '/shared/mapData.js';
 import { createDetailedWeaponMesh, getSharedToonGradient } from './player.js';
-import { ServerClock, SnapshotBuffer, createSampleOut } from './interpolation.js';
+import { ServerClock, SnapshotBuffer, createSampleOut } from './net/interpolation.js';
 import { GroundCover } from './groundCover.js';
 import {
   MODEL_TEX,

@@ -5,7 +5,7 @@ import {
   createPoseWeights,
   stepPoseWeights
 } from '../shared/mapData.js';
-import { SnapshotBuffer, createSampleOut } from '../client/js/interpolation.js';
+import { SnapshotBuffer, createSampleOut } from '../client/js/net/interpolation.js';
 
 test('stepPoseWeights: mantiene suma unitaria (1.0) y mezcla suavemente entre estados sin saltos bruscos', () => {
   const w = createPoseWeights();

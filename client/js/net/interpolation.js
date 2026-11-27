@@ -1,4 +1,4 @@
-// client/js/interpolation.js
+// client/js/net/interpolation.js
 // Interpolación de snapshots con retardo fijo para entidades remotas (jugadores y fauna).
 //
 // El servidor envía el estado a 20 Hz (cada 50 ms). En vez de perseguir el último snapshot

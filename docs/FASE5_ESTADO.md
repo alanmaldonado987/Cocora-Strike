@@ -30,7 +30,7 @@ Regla: **extraer y organizar código sin cambiar comportamiento**. Un dominio po
 - [x] `@playwright/test` como devDependency
 
 ### 1. Cliente (`client/js/`)
-- [ ] `net/` — network.js, interpolation.js, prediction.js
+- [x] `net/` — network.js, interpolation.js, prediction.js (prediction = métodos de reconciliación mezclados en `LocalPlayerController` vía `core/mixin.js`)
 - [ ] `audio/` — audio.js
 - [ ] `ui/` — hud.js, minimap.js, lobby.js, killfeed.js
 - [ ] `core/` — loop.js (paso fijo), quality.js, input.js
@@ -59,3 +59,4 @@ Regla: **extraer y organizar código sin cambiar comportamiento**. Un dominio po
 | Dominio | Archivos creados / modificados | Notas |
 |---|---|---|
 | Infraestructura | `docs/FASE5_ESTADO.md`, `test/importGraph.test.js`, `package.json` | 82 pruebas en verde |
+| net | `client/js/net/{network,interpolation,prediction}.js`, `client/js/core/mixin.js`; imports en `main.js`, `world.js`, `player.js` y tests | 82 pruebas; humo OK |

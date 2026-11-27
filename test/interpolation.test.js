@@ -7,7 +7,7 @@ import {
   SnapshotBuffer,
   createSampleOut,
   lerpAngle
-} from '../client/js/interpolation.js';
+} from '../client/js/net/interpolation.js';
 
 test('lerpAngle toma el camino corto', () => {
   assert.ok(Math.abs(lerpAngle(3.0, -3.0, 0.5) - Math.PI) < 0.3);

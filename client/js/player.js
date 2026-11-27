@@ -42,6 +42,12 @@ import {
   createArmasV1WeaponMesh,
   isSharedArmasV1Geometry
 } from '/Modelos%203D/armasV1.js';
+import {
+  prepareAvatarMaterialsForFade,
+  applyAvatarOpacity,
+  applyActiveWeaponVisibility,
+  readMuzzleWorldPosition
+} from './avatarPerf.js';
 
 const _ikTargetWorld = new THREE.Vector3();
 const _ikTargetTorso = new THREE.Vector3();
@@ -106,6 +112,14 @@ const _fpAdsPos = new THREE.Vector3();
 const _fpPos = new THREE.Vector3();
 const _fireCamDir = new THREE.Vector3();
 const _fireAimDir = new THREE.Vector3();
+const _fireCamOrigin = new THREE.Vector3();
+const _fireShotOrigin = new THREE.Vector3();
+const _shotPayloadPool = Array.from({ length: 8 }, () => ({
+  origin: { x: 0, y: 0, z: 0 },
+  dir: { x: 0, y: 0, z: 0 },
+  weapon: 'fists'
+}));
+let _shotPayloadCursor = 0;
 const _camLookDir = new THREE.Vector3();
 const _camRightVec = new THREE.Vector3();
 const _camBackDir = new THREE.Vector3();
@@ -347,6 +361,9 @@ export function createVoxelAvatar(name, colorIdx = 0, isLocal = false) {
     sharedGeos
   } = buildExternalCharacterRig(shirtHex, toonGrad);
 
+  // Preconfigurar transparencia estable una sola vez para el avatar local (evita recompilar shaders en combate)
+  prepareAvatarMaterialsForFade(allAvatarMats, isLocal);
+
   // Montura de las 7 armas de "Armas v1" + machete anclada exactamente al agarre de la mano derecha (rightArm.hand)
   const weapons = {
     fists: createDetailedWeaponMesh('fists', 0.92),
@@ -358,7 +375,10 @@ export function createVoxelAvatar(name, colorIdx = 0, isLocal = false) {
     rifle: createDetailedWeaponMesh('rifle', 0.93),
     sniper: createDetailedWeaponMesh('sniper', 0.88)
   };
-  for (const [k, m] of Object.entries(weapons)) {
+  const weaponKeys = Object.keys(weapons);
+  for (let i = 0; i < weaponKeys.length; i++) {
+    const k = weaponKeys[i];
+    const m = weapons[k];
     m.visible = k === 'fists';
     weaponMount.add(m);
   }
@@ -386,6 +406,7 @@ export function createVoxelAvatar(name, colorIdx = 0, isLocal = false) {
   };
 
   const tmpWorldVec = new THREE.Vector3();
+  const muzzleWorldOut = new THREE.Vector3();
 
   return {
     root,
@@ -420,26 +441,10 @@ export function createVoxelAvatar(name, colorIdx = 0, isLocal = false) {
       healCrossMat.dispose();
     },
     setOpacity(alpha = 1.0, hideWeapon = false) {
-      const clamped = Math.max(0, Math.min(1, alpha));
-      st.lastAlpha = clamped;
-      st.hideWeaponInAds = hideWeapon;
-      const isTrans = clamped < 0.98;
-      for (let i = 0; i < allAvatarMats.length; i++) {
-        const m = allAvatarMats[i];
-        if (m.transparent !== isTrans) {
-          m.transparent = isTrans;
-          m.needsUpdate = true;
-        }
-        m.opacity = clamped;
-      }
-      weaponMount.visible = !hideWeapon && clamped > 0.25 && !healProp.visible;
+      applyAvatarOpacity(st, allAvatarMats, weaponMount, healProp.visible, alpha, hideWeapon);
     },
     setWeapon(weaponId) {
-      const targetKey = weapons[weaponId] ? weaponId : 'fists';
-      st.activeWeapon = targetKey;
-      for (const [k, m] of Object.entries(weapons)) {
-        m.visible = k === targetKey;
-      }
+      st.activeWeapon = applyActiveWeaponVisibility(weapons, weaponKeys, st.activeWeapon, weaponId);
     },
     setHealth(hp, maxHp = 100) {
       overheadPlate?.userData.renderPlate(hp, maxHp);
@@ -451,15 +456,8 @@ export function createVoxelAvatar(name, colorIdx = 0, isLocal = false) {
       st.recoilAmount = 1.0;
       st.flashTimer = 0.055;
     },
-    getMuzzleWorldPosition(fallbackOut) {
-      const activeMesh = weapons[st.activeWeapon];
-      const tip = activeMesh?.userData?.muzzleTip;
-      if (tip) {
-        root.updateMatrixWorld(true);
-        tip.getWorldPosition(tmpWorldVec);
-        return { x: tmpWorldVec.x, y: tmpWorldVec.y, z: tmpWorldVec.z };
-      }
-      return fallbackOut;
+    getMuzzleWorldPosition(fallbackOut, targetOut = muzzleWorldOut) {
+      return readMuzzleWorldPosition(root, weapons, st.activeWeapon, tmpWorldVec, targetOut, fallbackOut);
     },
     animate(
       walkPhase,
@@ -1074,7 +1072,13 @@ class FirstPersonWeaponRig {
       rifle: this.buildArmedRig('rifle'),
       sniper: this.buildArmedRig('sniper')
     };
-    Object.values(this.models).forEach((m) => this.pivot.add(m));
+    this.modelKeys = Object.keys(this.models);
+    for (let i = 0; i < this.modelKeys.length; i++) {
+      const k = this.modelKeys[i];
+      const m = this.models[k];
+      m.visible = k === 'fists';
+      this.pivot.add(m);
+    }
 
     this.currentWeapon = 'fists';
     this.adsBlend = 0;
@@ -1152,11 +1156,9 @@ class FirstPersonWeaponRig {
 
   setWeapon(weaponId, instant = false) {
     const key = this.models[weaponId] ? weaponId : 'fists';
-    if (this.currentWeapon !== key && !instant) this.equipBlend = 0;
-    this.currentWeapon = key;
-    for (const [id, mesh] of Object.entries(this.models)) {
-      mesh.visible = id === key;
-    }
+    if (this.currentWeapon === key) return;
+    if (!instant) this.equipBlend = 0;
+    this.currentWeapon = applyActiveWeaponVisibility(this.models, this.modelKeys, this.currentWeapon, key);
   }
 
   addMouseSway(dx, dy) {
@@ -1844,7 +1846,7 @@ export class LocalPlayerController {
   }
 
   clearActiveInputs() {
-    for (const key of Object.keys(this.keys)) {
+    for (const key in this.keys) {
       this.keys[key] = false;
     }
     this.mouseDownLeft = false;
@@ -1940,24 +1942,24 @@ export class LocalPlayerController {
       : this.isCrouching
       ? PLAYER_CROUCH_EYE_HEIGHT
       : PLAYER_EYE_HEIGHT;
-    let origin = { x: camX, y: camY + eyeH, z: camZ };
+    _fireShotOrigin.set(camX, camY + eyeH, camZ);
     _fireAimDir.copy(_fireCamDir);
 
     const sniperAds = this.aimingZoom && this.equipped === 'sniper';
     if (this.cameraMode === 'third' && !sniperAds) {
-      const camOrigin = {
-        x: this.camera.position.x,
-        y: this.camera.position.y,
-        z: this.camera.position.z
-      };
-      const camHit = raycastVoxels(mapData, camOrigin, _fireCamDir, wSpec.range + 20);
+      _fireCamOrigin.set(
+        this.camera.position.x,
+        this.camera.position.y,
+        this.camera.position.z
+      );
+      const camHit = raycastVoxels(mapData, _fireCamOrigin, _fireCamDir, wSpec.range + 20);
       if (this.avatar && this.equipped !== 'fists') {
-        origin = this.avatar.getMuzzleWorldPosition(origin);
+        this.avatar.getMuzzleWorldPosition(_fireShotOrigin, _fireShotOrigin);
       }
       _fireAimDir.set(
-        camHit.point.x - origin.x,
-        camHit.point.y - origin.y,
-        camHit.point.z - origin.z
+        camHit.point.x - _fireShotOrigin.x,
+        camHit.point.y - _fireShotOrigin.y,
+        camHit.point.z - _fireShotOrigin.z
       ).normalize();
     }
 
@@ -1978,11 +1980,16 @@ export class LocalPlayerController {
     this.avatar?.triggerFireEffect();
     this.fpRig.triggerFire(this.equipped);
 
-    this.onShootRequest?.({
-      origin,
-      dir: { x: _fireAimDir.x, y: _fireAimDir.y, z: _fireAimDir.z },
-      weapon: this.equipped
-    });
+    const slot = _shotPayloadPool[_shotPayloadCursor];
+    _shotPayloadCursor = (_shotPayloadCursor + 1) & 7;
+    slot.origin.x = _fireShotOrigin.x;
+    slot.origin.y = _fireShotOrigin.y;
+    slot.origin.z = _fireShotOrigin.z;
+    slot.dir.x = _fireAimDir.x;
+    slot.dir.y = _fireAimDir.y;
+    slot.dir.z = _fireAimDir.z;
+    slot.weapon = this.equipped;
+    this.onShootRequest?.(slot);
     return true;
   }
 

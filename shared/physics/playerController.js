@@ -13,6 +13,7 @@ import {
   WEAPONS,
   HEAL_CONFIG,
   SLIDE_CONFIG,
+  SLIDE_FEEL_CONFIG,
   PARACHUTE_CONFIG,
   PLAYER_INPUT_BUTTONS,
   MOVEMENT_CONFIG,
@@ -443,7 +444,9 @@ export function stepPlayer(state, input, dt, map, options = {}) {
 
   const sprinting = sprintHeld && !adsHeld && !options.reloading && !state.isSliding;
   if (sprinting && state.isCrouching) {
-    state.isCrouching = false;
+    if (hasCapsuleClearance(map, state.x, state.y, state.z, PLAYER_RADIUS, PLAYER_HEIGHT)) {
+      state.isCrouching = false;
+    }
   }
 
   // ==================== 1. CAÍDA LIBRE Y PARACAÍDAS ====================
@@ -630,27 +633,44 @@ export function stepPlayer(state, input, dt, map, options = {}) {
     ev.exitedWater = true;
   }
 
-  // Activación de slide o alternancia de agachado
+  // Activación de slide en carrera o alternancia de postura agachada
   if (state.onGround && !state.isVaulting) {
+    const curHorizSpeed = Math.hypot(state.vx, state.vz);
     const fwdX = Math.sin(state.yaw);
     const fwdZ = Math.cos(state.yaw);
-    const forwardDot = wishX * fwdX + wishZ * fwdZ;
-    const wantsSlide = (slideJustPressed || (crouchJustPressed && sprintHeld && forwardDot > 0.5)) && !state.isSliding;
+    const velDirX = curHorizSpeed > 0.1 ? state.vx / curHorizSpeed : fwdX;
+    const velDirZ = curHorizSpeed > 0.1 ? state.vz / curHorizSpeed : fwdZ;
+    const forwardAlign = velDirX * fwdX + velDirZ * fwdZ;
+    const wantsSlide = (slideJustPressed || (crouchJustPressed && sprintHeld)) && !state.isSliding;
 
-    if (wantsSlide && state.slideCooldownTimer <= 0 && forwardDot > 0.35) {
+    if (
+      wantsSlide &&
+      state.slideCooldownTimer <= 0 &&
+      curHorizSpeed >= SLIDE_FEEL_CONFIG.minEntrySpeed &&
+      forwardAlign > 0.25
+    ) {
       state.isCrouching = false;
       state.isSliding = true;
       state.slideTimer = SLIDE_CONFIG.durationSec;
       state.slideCooldownTimer = SLIDE_CONFIG.cooldownSec;
-      state.slideSpeed = SLIDE_CONFIG.initialSpeed;
-      state.slideDirX = fwdX;
-      state.slideDirZ = fwdZ;
-      state.vx = fwdX * state.slideSpeed;
-      state.vz = fwdZ * state.slideSpeed;
+      state.slideSpeed = Math.min(
+        SLIDE_FEEL_CONFIG.maxDownhillSpeed,
+        Math.min(SLIDE_CONFIG.initialSpeed, curHorizSpeed + SLIDE_FEEL_CONFIG.impulseBonus)
+      );
+      state.slideDirX = velDirX;
+      state.slideDirZ = velDirZ;
+      state.vx = velDirX * state.slideSpeed;
+      state.vz = velDirZ * state.slideSpeed;
       if (state.isHealing) ev.cancelHeal = true;
       ev.slideStarted = true;
-    } else if (crouchJustPressed && !state.isSliding && !sprinting) {
-      state.isCrouching = !state.isCrouching;
+    } else if (crouchJustPressed && !state.isSliding) {
+      if (state.isCrouching) {
+        if (hasCapsuleClearance(map, state.x, state.y, state.z, PLAYER_RADIUS, PLAYER_HEIGHT)) {
+          state.isCrouching = false;
+        }
+      } else {
+        state.isCrouching = true;
+      }
     }
   }
 
@@ -748,43 +768,71 @@ export function stepPlayer(state, input, dt, map, options = {}) {
     return ev;
   }
 
-  // Deslizamiento (Slide)
+  // Deslizamiento dinámico (Slide): impulso en carrera, respuesta continua a pendiente y salida suave a agachado
   if (state.isSliding) {
     state.slideTimer -= dt;
-    const aheadGround = map.getGroundHeightAt(
-      state.x + state.slideDirX * 1.4,
-      state.z + state.slideDirZ * 1.4,
+    const sampleSpan = 0.75;
+    const behindY = map.getGroundHeightAt(
+      state.x - state.slideDirX * sampleSpan,
+      state.z - state.slideDirZ * sampleSpan,
       state.y
     );
-    const curGround = map.getGroundHeightAt(state.x, state.z, state.y);
-    const downhillSlope = (curGround - aheadGround) / 1.4;
+    const aheadY = map.getGroundHeightAt(
+      state.x + state.slideDirX * sampleSpan,
+      state.z + state.slideDirZ * sampleSpan,
+      state.y
+    );
+    // slope > 0 cuesta abajo, slope < 0 cuesta arriba
+    const slope = (behindY - aheadY) / (sampleSpan * 2);
 
-    if (downhillSlope > 0.08) {
-      state.slideSpeed = Math.min(16.5, state.slideSpeed + downhillSlope * SLIDE_CONFIG.downhillBoostFactor * dt);
-      if (downhillSlope > 0.22 && state.slideTimer > 0.05) {
-        state.slideTimer = Math.min(SLIDE_CONFIG.durationSec, state.slideTimer + dt * 0.35);
+    let netAccel = -SLIDE_FEEL_CONFIG.flatFriction;
+    if (slope > 0.01) {
+      netAccel += slope * (SLIDE_FEEL_CONFIG.flatFriction + SLIDE_FEEL_CONFIG.downhillAccelFactor);
+      if (slope > 0.16 && state.slideTimer > 0.04) {
+        state.slideTimer = Math.min(SLIDE_CONFIG.durationSec * 1.35, state.slideTimer + dt * Math.min(0.85, slope * 1.8));
       }
-    } else {
-      const uphillBrake = downhillSlope < -0.05 ? Math.abs(downhillSlope) * 12 : 0;
-      state.slideSpeed = Math.max(
-        SLIDE_CONFIG.minEndSpeed,
-        state.slideSpeed - (SLIDE_CONFIG.frictionDecay + uphillBrake) * dt
-      );
+    } else if (slope < -0.01) {
+      netAccel += slope * SLIDE_FEEL_CONFIG.uphillBrakeFactor;
     }
+
+    state.slideSpeed = Math.max(
+      0,
+      Math.min(SLIDE_FEEL_CONFIG.maxDownhillSpeed, state.slideSpeed + netAccel * dt)
+    );
 
     state.vx = state.slideDirX * state.slideSpeed;
     state.vz = state.slideDirZ * state.slideSpeed;
 
-    const desiredX = state.x + state.vx * dt;
-    const desiredZ = state.z + state.vz * dt;
-    integrateGroundAirMotor(map, state, dt, PLAYER_RADIUS, PLAYER_SLIDE_HEIGHT, wasOnGround, ev.jumped, ev, MOVEMENT_CONFIG);
-    clipVelocityAgainstCollision(state, desiredX, desiredZ);
+    integrateGroundAirMotor(
+      map,
+      state,
+      dt,
+      PLAYER_RADIUS,
+      PLAYER_SLIDE_HEIGHT,
+      wasOnGround,
+      ev.jumped,
+      ev,
+      MOVEMENT_CONFIG
+    );
 
-    if (state.slideTimer <= 0 || !state.onGround) {
+    const postSpeed = Math.hypot(state.vx, state.vz);
+    state.slideSpeed = Math.min(state.slideSpeed, postSpeed);
+
+    if (!state.onGround) {
       state.isSliding = false;
       state.slideTimer = 0;
       ev.slideEnded = true;
+    } else if (state.slideSpeed <= SLIDE_FEEL_CONFIG.exitToCrouchSpeed || state.slideTimer <= 0) {
+      state.isSliding = false;
+      state.slideTimer = 0;
+      state.isCrouching = true;
+      ev.slideEnded = true;
+      ev.slideEndedToCrouch = true;
+      state.moveMode = postSpeed > 0.25 ? 'crouch_walk' : 'crouch_idle';
+      ev.movedHorizDist = Math.hypot(state.x - prevX, state.z - prevZ);
+      return ev;
     }
+
     state.moveMode = 'slide';
     ev.movedHorizDist = Math.hypot(state.x - prevX, state.z - prevZ);
     return ev;

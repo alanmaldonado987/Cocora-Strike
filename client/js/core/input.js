@@ -6,22 +6,24 @@
 
 import { PLAYER_INPUT_BUTTONS, PLAYER_STATE } from '/shared/mapData.js';
 
-// Solicita Pointer Lock sin aceleración del sistema operativo (unadjustedMovement) con fallback seguro
+// Solicita Pointer Lock sin aceleración del sistema operativo (unadjustedMovement) con fallback seguro.
+// En navegadores modernos requestPointerLock devuelve una promesa: también se captura el rechazo del fallback
+// (p. ej. sin gesto del usuario cuando la partida la inicia otro jugador) para no dejar promesas sin manejar.
 export function requestRawPointerLock(element) {
   if (!element?.requestPointerLock) return;
+  const fallback = () => {
+    try {
+      const retry = element.requestPointerLock();
+      if (retry && typeof retry.catch === 'function') retry.catch(() => {});
+    } catch {}
+  };
   try {
     const maybePromise = element.requestPointerLock({ unadjustedMovement: true });
     if (maybePromise && typeof maybePromise.catch === 'function') {
-      maybePromise.catch(() => {
-        try {
-          element.requestPointerLock();
-        } catch {}
-      });
+      maybePromise.catch(fallback);
     }
   } catch {
-    try {
-      element.requestPointerLock();
-    } catch {}
+    fallback();
   }
 }
 

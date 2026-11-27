@@ -18,12 +18,17 @@ export default [
     }
   },
   {
-    files: ['server/**/*.js', 'test/**/*.js', 'eslint.config.js'],
+    files: ['server/**/*.js', 'test/**/*.js', 'eslint.config.js', 'playwright.config.js'],
     languageOptions: { globals: globals.node }
   },
   {
     files: ['client/**/*.js', 'Modelos 3D/**/*.js'],
     languageOptions: { globals: { ...globals.browser, io: 'readonly' } }
+  },
+  {
+    // E2E: el código dentro de page.evaluate() corre en el navegador
+    files: ['test/e2e/**/*.js'],
+    languageOptions: { globals: { ...globals.node, ...globals.browser } }
   },
   {
     files: ['shared/**/*.js'],

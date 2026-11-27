@@ -40,7 +40,7 @@ Regla: **extraer y organizar código sin cambiar comportamiento**. Un dominio po
 ### 2. Shared (`shared/`)
 - [x] `protocol.js` (ids de mensajes, cuantización)
 - [x] `physics/` — collision.js, raycast.js, playerController.js, vault.js
-- [ ] `map/` — terrain.js, buildings.js, props.js, pois.data.js
+- [x] `map/` — terrain.js, buildings.js, props.js, pois.data.js (generateCocoraMap encadena buildTerrain → buildStructures → createGroundQueries → buildProps en el orden original del RNG)
 - [ ] Constantes congeladas (`Object.freeze`) para estados (`'ground'`, `'skydiving'`, `moveMode`, …) en `shared/config.js`
 - [ ] Fábrica/registro único de armas en `/shared`
 - [ ] `// @ts-check` + JSDoc en todo `/shared`
@@ -67,3 +67,4 @@ Regla: **extraer y organizar código sin cambiar comportamiento**. Un dominio po
 | world | `client/js/world.js` → `client/js/world/{world,common,materials,water,foliage,groundCover,lights,sky,terrain,structures,aircraft,loot,wildlife,effects}.js`; constructor delega en `initSharedMaterialCache()`; `damp` desde `shared/math.js` | 82 pruebas; humo OK |
 | protocol | `shared/protocol.js` (C2S/S2C congelados + `quantize`), `test/protocol.test.js`; eventos en `server/index.js`, `server/validation.js`, `server/gameRoom.js`, `server/room/*.js`, `client/js/net/network.js` | 86 pruebas; humo OK; mismos strings en cable |
 | physics | `shared/physics.js` → `shared/physics/{collision,raycast,vault}.js`; `playerController.js` y `mapGen.js` importan de los nuevos módulos; barril `mapData.js` actualizado (+ protocol) | 86 pruebas; humo OK |
+| map | `shared/mapGen.js` (orquestador) → `shared/map/{terrain,buildings,props,pois.data}.js`; `test/mapFingerprint.test.js` + `test/fixtures/mapFingerprint.golden.json` (huella del mapa previo a la Fase 5, 3 semillas) | 89 pruebas; mapa bit a bit idéntico |

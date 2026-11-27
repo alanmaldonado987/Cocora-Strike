@@ -32,6 +32,7 @@ import { createMinimap } from './ui/minimap.js';
 import { createKillfeed } from './ui/killfeed.js';
 import { createLobby } from './ui/lobby.js';
 import { isPlaneOccupied } from './world/aircraftDirector.js';
+import { createFpsMeter } from './ui/fpsMeter.js';
 import { preloadExternalModelAssets } from '/Modelos%203D/cocoraModels.js';
 
 const container = document.getElementById('game-container');
@@ -454,7 +455,19 @@ lobby.bindControls({
 
 let minimapAccum = 0;
 
+// Contador de FPS del HUD (se actualiza dos veces por segundo; el DOM no se toca por fotograma)
+const fpsMeter = createFpsMeter({
+  onUpdate(fps, level, worstMs) {
+    const el = ui.fpsCount;
+    if (!el) return;
+    el.textContent = String(fps);
+    el.className = `fps-${level}`;
+    el.parentElement.title = `Fotogramas por segundo · peor fotograma: ${worstMs} ms`;
+  }
+});
+
 function renderFrame(dt, elapsed) {
+  fpsMeter.tick(performance.now());
 
   world.update(dt, elapsed, planeState, stormState, localPlayer);
   localPlayer.update(dt, currentMap, planeState, world, net.getRemoteEntityList());

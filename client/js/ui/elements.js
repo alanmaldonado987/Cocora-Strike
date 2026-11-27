@@ -32,6 +32,7 @@ export function queryUiElements() {
     damageFlash: document.getElementById('damage-flash'),
     aliveCount: document.getElementById('alive-count'),
     killsCount: document.getElementById('kills-count'),
+    fpsCount: document.getElementById('fps-count'),
     killfeed: document.getElementById('killfeed'),
     actionBanner: document.getElementById('action-banner'),
     pointerPrompt: document.getElementById('pointer-prompt'),

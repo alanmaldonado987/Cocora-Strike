@@ -37,7 +37,10 @@ import {
   buildOleoWheelAssembly,
   TelescopicPiston,
   bakeRigidAircraftBatches,
-  registerSharedAircraftMat
+  registerSharedAircraftMat,
+  createAircraftControls,
+  attachAircraftControlApi,
+  solveMountAim
 } from './avionesShared.js';
 
 export const AC130_SCALE = 2.55;
@@ -844,6 +847,12 @@ export function buildAC130Transport(addLightAnchorFn = null) {
   sideDoorPivot.add(tubeMesh(sideLoop(-1, DOOR).map((p) => p.clone().sub(doorHinge)), 0.012, M.ac130Trim, true));
   scaledAirframe.add(sideDoorPivot);
 
+  // Bisagras visibles (nudillos verticales) sobre el borde de giro de la puerta lateral
+  for (const v of [0.14, 0.5, 0.86]) {
+    const hp = sidePoint(DOOR.z1, lerp(DOOR.y0, DOOR.y1, v), -1);
+    scaledAirframe.add(makeMesh(new THREE.CylinderGeometry(0.018, 0.018, 0.075, 8), M.weaponSteel, hp.x, hp.y, hp.z));
+  }
+
   const pistons = [];
   const rampSurfacePt = (z, x) => hullAt(z, angleWhere(z, Math.PI, Math.PI / 2, (p) => p.x - x));
   for (const px of [-0.48, 0.48]) {
@@ -864,9 +873,10 @@ export function buildAC130Transport(addLightAnchorFn = null) {
   }
 
   // Luz ambiental tenue de bodega registrada en el pool de luces del mundo (persistente)
-  if (addLightAnchorFn) {
-    addLightAnchorFn(root, '#ffd699', 1.35, 15, 2, 0, 1.65, -0.5, true);
-  }
+  const INTERIOR_LIGHT_INTENSITY = 1.35;
+  const interiorLight = addLightAnchorFn
+    ? addLightAnchorFn(root, '#ffd699', INTERIOR_LIGHT_INTENSITY, 15, 2, 0, 1.65, -0.5, true)
+    : null;
 
   const gunMounts = [rotaryMount.state, howitzerMount.state];
   const dynamicList = [
@@ -895,7 +905,10 @@ export function buildAC130Transport(addLightAnchorFn = null) {
   root.updateMatrixWorld(true);
   for (const p of pistons) p.update();
 
-  return {
+  const controls = createAircraftControls();
+  const aimOut = { pan: 0, tilt: 0 };
+
+  const rig = {
     id: 'ac130',
     label: 'AC-130J Ghostrider',
     group: root,
@@ -1001,7 +1014,8 @@ export function buildAC130Transport(addLightAnchorFn = null) {
 
       // Aceleración e inercia de RPM en las 4 hélices + ligera inclinación según empuje/maniobra + disco blur
       const bankRoll = flightContext?.roll || 0;
-      state.throttle = 0.94 + Math.sin(state.scanClock * 0.9) * 0.05;
+      state.throttle =
+        controls.throttle !== null ? controls.throttle : 0.94 + Math.sin(state.scanClock * 0.9) * 0.05;
       const lag = state.throttle - state.rpm;
       state.rpm = dampValue(state.rpm, state.throttle, lag > 0 ? 1.3 : 0.7, dt);
 
@@ -1014,6 +1028,7 @@ export function buildAC130Transport(addLightAnchorFn = null) {
       blurMat.opacity = THREE.MathUtils.smoothstep(state.rpm, 0.42, 0.95) * 0.34;
 
       // Rampa trasera y puerta lateral hidráulica con easing suave y pistones telescópicos sincronizados
+      if (controls.doorsOpen !== null) state.rampTarget = controls.doorsOpen ? 1.0 : 0.0;
       state.rampOpen = approachValue(state.rampOpen, state.rampTarget, dt * 0.48);
       const easedRamp = easeInOutCubic(state.rampOpen);
       rampPivot.rotation.x = -0.36 * easedRamp; // inclinación de salto limpia sin cruzar el fuselaje
@@ -1025,29 +1040,45 @@ export function buildAC130Transport(addLightAnchorFn = null) {
       sensorYaw.rotation.y = dampValue(sensorYaw.rotation.y, sweepPan - 0.25, 4.0, dt);
       sensorPitch.rotation.x = dampValue(sensorPitch.rotation.x, sweepTilt + 0.18, 4.0, dt);
 
-      for (const gm of gunMounts) {
-        gm.pan.rotation.y = dampValue(gm.pan.rotation.y, sweepPan, 3.5, dt);
-        gm.tilt.rotation.x = dampValue(gm.tilt.rotation.x, sweepTilt, 3.5, dt);
+      // Modo manual (setFiring true/false) o demostración (null) con ráfagas procedurales espaciadas
+      const manualFire = controls.firing !== null;
+      const wantFire = manualFire ? controls.firing : true;
 
-        if (gm.kind === 'rotary' && gm.spinCluster) {
-          gm.spinRate = dampValue(gm.spinRate, 26.0, 2.5, dt);
+      for (const gm of gunMounts) {
+        // Apuntado explícito (aimTurrets) limitado al arco de la ventana de estribor; si no, barrido suave
+        let panTarget = sweepPan;
+        let tiltTarget = sweepTilt;
+        if (controls.hasAim && solveMountAim(gm.pan, controls.aimTarget, Math.PI / 2, 0.95, -0.3, 0.85, aimOut)) {
+          panTarget = aimOut.pan;
+          tiltTarget = aimOut.tilt;
+        }
+        gm.pan.rotation.y = dampValue(gm.pan.rotation.y, panTarget, 3.5, dt);
+        gm.tilt.rotation.x = dampValue(gm.tilt.rotation.x, tiltTarget, 3.5, dt);
+
+        const rotary = gm.kind === 'rotary' && gm.spinCluster;
+        if (rotary) {
+          // El GAU-12 acelera sus cañones antes de disparar y se detiene con inercia al soltar el gatillo
+          const spinTarget = manualFire ? (wantFire ? 30.0 : 0.0) : 26.0;
+          gm.spinRate = dampValue(gm.spinRate, spinTarget, wantFire ? 2.5 : 1.1, dt);
           gm.spinCluster.rotation.z += gm.spinRate * dt;
-          gm.burstClock -= dt;
-          if (gm.burstClock <= 0) {
-            gm.burstClock = 2.6 + (state.scanClock % 0.7);
+        }
+
+        gm.burstClock -= dt;
+        const canShoot = wantFire && (!rotary || !manualFire || gm.spinRate > 18.0);
+        if (canShoot && gm.burstClock <= 0) {
+          if (rotary) {
+            gm.burstClock = manualFire ? 0.06 : 2.6 + (state.scanClock % 0.7);
             gm.recoilOffset = 0.024;
             gm.flashLevel = 0.85;
-          }
-          gm.recoilOffset = dampValue(gm.recoilOffset, 0, 16.0, dt);
-        } else {
-          gm.burstClock -= dt;
-          if (gm.burstClock <= 0) {
-            gm.burstClock = 4.4;
+          } else {
+            gm.burstClock = manualFire ? 1.6 : 4.4;
             gm.recoilOffset = 0.12;
             gm.flashLevel = 0.95;
           }
-          gm.recoilOffset = dampValue(gm.recoilOffset, 0, 3.4, dt);
+        } else if (!canShoot && gm.burstClock < 0) {
+          gm.burstClock = 0;
         }
+        gm.recoilOffset = dampValue(gm.recoilOffset, 0, rotary ? 16.0 : 3.4, dt);
 
         gm.recoil.position.z = -gm.recoilOffset;
         gm.flashLevel = Math.max(0, gm.flashLevel - dt * (gm.kind === 'rotary' ? 14 : 7));
@@ -1062,8 +1093,22 @@ export function buildAC130Transport(addLightAnchorFn = null) {
       for (let i = 0; i < pistons.length; i++) {
         pistons[i].update();
       }
+    },
+
+    /** Enciende/apaga la luz tenue de bodega (p. ej. apagarla en calidad baja); usa el pool global de luces. */
+    setInteriorLight(on) {
+      if (interiorLight) interiorLight.userData.light.intensity = on ? INTERIOR_LIGHT_INTENSITY : 0;
+    },
+
+    /** Afustes articulados expuestos (pan/tilt/recoil/spinCluster) para depuración y pruebas. */
+    turrets: gunMounts,
+
+    getState() {
+      return { throttle: state.throttle, rpm: state.rpm, rampOpen: state.rampOpen, rampTarget: state.rampTarget };
     }
   };
+
+  return attachAircraftControlApi(rig, controls);
 }
 
 function lerpAngleShort(a, b, t) {

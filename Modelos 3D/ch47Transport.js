@@ -36,7 +36,10 @@ import {
   buildOleoWheelAssembly,
   TelescopicPiston,
   bakeRigidAircraftBatches,
-  registerSharedAircraftMat
+  registerSharedAircraftMat,
+  createAircraftControls,
+  attachAircraftControlApi,
+  solveMountAim
 } from './avionesShared.js';
 
 export const CH47_SCALE = 2.55;
@@ -654,6 +657,12 @@ export function buildCH47Transport(addLightAnchorFn = null) {
   troopDoorPivot.add(tubeMesh(sideLoop(-1, TROOP_DOOR).map((p) => p.clone().sub(troopDoorHinge)), 0.012, M.ch47Trim, true));
   scaledAirframe.add(troopDoorPivot);
 
+  // Bisagras visibles (nudillos verticales) sobre el borde de giro de la puerta de tropa
+  for (const v of [0.14, 0.5, 0.86]) {
+    const hp = sidePoint(TROOP_DOOR.z1, lerp(TROOP_DOOR.y0, TROOP_DOOR.y1, v), -1);
+    scaledAirframe.add(makeMesh(new THREE.CylinderGeometry(0.018, 0.018, 0.075, 8), M.weaponSteel, hp.x, hp.y, hp.z));
+  }
+
   const pistons = [];
   for (const px of [-0.50, 0.50]) {
     const aLocal = new THREE.Vector3(px, 1.44, -2.02);
@@ -672,9 +681,10 @@ export function buildCH47Transport(addLightAnchorFn = null) {
     pistons.push(dp);
   }
 
-  if (addLightAnchorFn) {
-    addLightAnchorFn(root, '#ffd699', 1.35, 14, 2, 0, 1.45, -0.6, true);
-  }
+  const INTERIOR_LIGHT_INTENSITY = 1.35;
+  const interiorLight = addLightAnchorFn
+    ? addLightAnchorFn(root, '#ffd699', INTERIOR_LIGHT_INTENSITY, 14, 2, 0, 1.45, -0.6, true)
+    : null;
 
   const minigunMounts = [portMinigun.state, starboardMinigun.state];
   const dynamicList = [
@@ -706,7 +716,10 @@ export function buildCH47Transport(addLightAnchorFn = null) {
   root.updateMatrixWorld(true);
   for (const p of pistons) p.update();
 
-  return {
+  const controls = createAircraftControls();
+  const aimOut = { pan: 0, tilt: 0 };
+
+  const rig = {
     id: 'ch47',
     label: 'CH-47F Chinook',
     group: root,
@@ -805,7 +818,7 @@ export function buildCH47Transport(addLightAnchorFn = null) {
       // Rotores contrarrotativos sincronizados con inercia de RPM, inclinación cíclica y disco motion-blur
       const bankRoll = flightContext?.roll || 0;
       const pitchTilt = flightContext?.pitch || 0;
-      state.throttle = 0.95 + Math.sin(state.clock * 1.1) * 0.04;
+      state.throttle = controls.throttle !== null ? controls.throttle : 0.95 + Math.sin(state.clock * 1.1) * 0.04;
       const lag = state.throttle - state.rpm;
       state.rpm = dampValue(state.rpm, state.throttle, lag > 0 ? 1.2 : 0.65, dt);
 
@@ -821,6 +834,7 @@ export function buildCH47Transport(addLightAnchorFn = null) {
       blurMat.opacity = THREE.MathUtils.smoothstep(state.rpm, 0.40, 0.95) * 0.32;
 
       // Rampa trasera de asalto (gira hacia abajo: +X en local porque se extiende hacia -Z) + puerta lateral
+      if (controls.doorsOpen !== null) state.rampTarget = controls.doorsOpen ? 1.0 : 0.0;
       state.rampOpen = approachValue(state.rampOpen, state.rampTarget, dt * 0.46);
       const easedRamp = easeInOutCubic(state.rampOpen);
       rampPivot.rotation.x = 0.22 * easedRamp;
@@ -829,20 +843,34 @@ export function buildCH47Transport(addLightAnchorFn = null) {
       // Torreta FLIR ventral y ametralladoras laterales M134 articuladas (pan/tilt + rotación + retroceso)
       chinFlirYaw.rotation.y = Math.sin(state.clock * 0.7) * 0.42;
 
+      // Modo manual (setFiring true/false) o demostración (null) con ráfagas procedurales espaciadas
+      const manualFire = controls.firing !== null;
+      const wantFire = manualFire ? controls.firing : true;
+
       for (const mg of minigunMounts) {
-        const targetPan = mg.side * (1.22 + Math.sin(state.clock * 0.65 + mg.side) * 0.22);
-        const targetTilt = 0.20 + Math.cos(state.clock * 0.52 + mg.side) * 0.08;
+        // Cada M134 apunta solo dentro del arco de su propia ventana (babor/estribor)
+        let targetPan = mg.side * (1.22 + Math.sin(state.clock * 0.65 + mg.side) * 0.22);
+        let targetTilt = 0.20 + Math.cos(state.clock * 0.52 + mg.side) * 0.08;
+        if (controls.hasAim && solveMountAim(mg.pan, controls.aimTarget, mg.side * 1.22, 0.85, -0.3, 0.85, aimOut)) {
+          targetPan = aimOut.pan;
+          targetTilt = aimOut.tilt;
+        }
         mg.pan.rotation.y = dampValue(mg.pan.rotation.y, targetPan, 4.0, dt);
         mg.tilt.rotation.x = dampValue(mg.tilt.rotation.x, targetTilt, 4.0, dt);
 
-        mg.spinRate = dampValue(mg.spinRate, 32.0, 3.0, dt);
+        // Los 6 cañones aceleran antes de disparar y frenan con inercia al soltar el gatillo
+        const spinTarget = manualFire ? (wantFire ? 34.0 : 0.0) : 32.0;
+        mg.spinRate = dampValue(mg.spinRate, spinTarget, wantFire ? 3.0 : 1.1, dt);
         mg.spinCluster.rotation.z += mg.spinRate * dt;
 
         mg.burstClock -= dt;
-        if (mg.burstClock <= 0) {
-          mg.burstClock = 2.9 + (mg.side > 0 ? 0.4 : 0.9);
+        const canShoot = wantFire && (!manualFire || mg.spinRate > 20.0);
+        if (canShoot && mg.burstClock <= 0) {
+          mg.burstClock = manualFire ? 0.05 : 2.9 + (mg.side > 0 ? 0.4 : 0.9);
           mg.recoilOffset = 0.022;
           mg.flashLevel = 0.85;
+        } else if (!canShoot && mg.burstClock < 0) {
+          mg.burstClock = 0;
         }
         mg.recoilOffset = dampValue(mg.recoilOffset, 0, 16.0, dt);
         mg.recoil.position.z = -mg.recoilOffset;
@@ -859,8 +887,22 @@ export function buildCH47Transport(addLightAnchorFn = null) {
       for (let i = 0; i < pistons.length; i++) {
         pistons[i].update();
       }
+    },
+
+    /** Enciende/apaga la luz tenue de bodega (p. ej. apagarla en calidad baja); usa el pool global de luces. */
+    setInteriorLight(on) {
+      if (interiorLight) interiorLight.userData.light.intensity = on ? INTERIOR_LIGHT_INTENSITY : 0;
+    },
+
+    /** Afustes articulados expuestos (pan/tilt/recoil/spinCluster) para depuración y pruebas. */
+    turrets: minigunMounts,
+
+    getState() {
+      return { throttle: state.throttle, rpm: state.rpm, rampOpen: state.rampOpen, rampTarget: state.rampTarget };
     }
   };
+
+  return attachAircraftControlApi(rig, controls);
 }
 
 function lerpAngleShort(a, b, t) {

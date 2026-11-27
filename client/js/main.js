@@ -13,7 +13,10 @@ import {
 } from '/shared/mapData.js';
 import { SoundEngine } from './audio/audio.js';
 import { VoxelWorld } from './world.js';
-import { LocalPlayerController, requestRawPointerLock } from './player.js';
+import { LocalPlayerController } from './player.js';
+import { requestRawPointerLock } from './core/input.js';
+import { createRenderer, createGpuWarmUp } from './core/quality.js';
+import { createFrameLoop } from './core/loop.js';
 import { NetworkManager } from './net/network.js';
 import {
   createHudCache,
@@ -32,13 +35,7 @@ const container = document.getElementById('game-container');
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.06, 1150);
 
-const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-container.appendChild(renderer.domElement);
+const renderer = createRenderer(container);
 
 const audio = new SoundEngine(AUDIO_CONFIG);
 await preloadExternalModelAssets();
@@ -47,77 +44,7 @@ let currentMap = world.buildFromSeed(DEFAULT_MAP_SEED);
 
 const localPlayer = new LocalPlayerController(scene, camera, renderer.domElement, audio);
 
-// Prepara la GPU antes de que algo se vea, para que no se congele el juego la primera vez que se
-// dibuja algo (al saltar del avión se congelaba ~0.8-1 s y al abrir el paracaídas ~0.2 s):
-//  1) warmUpGpu(): compila los shaders de todos los objetos, también de los ocultos (paracaídas,
-//     armas en primera persona). renderer.compile no sube geometría y tarda ~0.1-0.3 s.
-//  2) queueMapWarmUp(): las geometrías del mapa (terreno, estructuras, vegetación), el botín y la
-//     fauna, que desde la cabina del avión no se ven (o están ocultos por distancia), se suben a la
-//     GPU de a pocas por fotograma: en cada fotograma unas cuantas piezas se dibujan aunque estén
-//     fuera de cámara o lejos (quedan recortadas, no se ven). El ritmo se adapta al tiempo de cada
-//     fotograma; en el avión suele terminar en ~1-2 s, en vez de un congelón al saltar.
-// Ritmo adaptativo: si el fotograma va holgado se suben más piezas, si va justo menos
-const WARM_MIN_PER_FRAME = 6;
-const WARM_MAX_PER_FRAME = 48;
-const WARM_TARGET_FRAME_MS = 14;
-let warmPerFrame = 12;
-let warmQueue = [];
-const warmBatch = [];
-const warmForcedVisible = [];
-
-function warmUpGpu() {
-  for (const [s, cam] of [[scene, camera], [localPlayer.fpRig?.scene, localPlayer.fpRig?.camera]]) {
-    if (s && cam) renderer.compile(s, cam);
-  }
-}
-
-const isDrawable = (o) => o.isMesh || o.isLine || o.isPoints || o.isSprite;
-
-function queueMapWarmUp() {
-  warmQueue = [];
-  // Primero (al final de la cola) botín y fauna: son lo que aparece de golpe cerca del aterrizaje
-  for (const group of [world.lootGroup, world.wildlifeGroup]) {
-    group.traverse((o) => {
-      if (isDrawable(o) && o.visible) warmQueue.push(o);
-    });
-  }
-  for (const group of [world.terrainGroup, world.structuresGroup, world.foliageGroup]) {
-    group.traverseVisible((o) => {
-      if (isDrawable(o) && o.frustumCulled) warmQueue.push(o);
-    });
-  }
-}
-
-function beginWarmBatch() {
-  warmBatch.length = 0;
-  warmForcedVisible.length = 0;
-  // warmBatch guarda pares [objeto, frustumCulled previo]
-  while (warmBatch.length < warmPerFrame * 2 && warmQueue.length > 0) {
-    const o = warmQueue.pop();
-    if (!o.parent) continue; // ya no está en la escena
-    // Dibujarlo este fotograma aunque esté oculto por distancia (p. ej. botín lejano)
-    for (let a = o.parent; a && !a.isScene; a = a.parent) {
-      if (!a.visible) {
-        a.visible = true;
-        warmForcedVisible.push(a);
-      }
-    }
-    warmBatch.push(o, o.frustumCulled);
-    o.frustumCulled = false;
-  }
-}
-
-function adaptWarmRate(frameMs) {
-  if (frameMs < WARM_TARGET_FRAME_MS * 0.75) warmPerFrame = Math.min(WARM_MAX_PER_FRAME, Math.ceil(warmPerFrame * 1.4));
-  else if (frameMs > WARM_TARGET_FRAME_MS) warmPerFrame = Math.max(WARM_MIN_PER_FRAME, Math.floor(warmPerFrame * 0.7));
-}
-
-function endWarmBatch() {
-  for (let i = 0; i < warmBatch.length; i += 2) warmBatch[i].frustumCulled = warmBatch[i + 1];
-  for (let i = 0; i < warmForcedVisible.length; i++) warmForcedVisible[i].visible = false;
-  warmBatch.length = 0;
-  warmForcedVisible.length = 0;
-}
+const gpuWarmUp = createGpuWarmUp({ renderer, scene, camera, localPlayer, world });
 
 // Modo depuración (?debug en la URL): expone objetos internos para medir rendimiento desde la consola.
 if (new URLSearchParams(window.location.search).has('debug')) {
@@ -125,8 +52,8 @@ if (new URLSearchParams(window.location.search).has('debug')) {
 }
 
 // Preparar la GPU con el mapa del lobby (los materiales y variantes de shader se reutilizan en la partida)
-warmUpGpu();
-queueMapWarmUp();
+gpuWarmUp.warmUpGpu();
+gpuWarmUp.queueMapWarmUp();
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -233,8 +160,8 @@ const net = new NetworkManager(scene, {
     ui.hudScreen.classList.remove('hidden');
     ui.killfeed.innerHTML = '';
     requestRawPointerLock(renderer.domElement);
-    warmUpGpu();
-    queueMapWarmUp();
+    gpuWarmUp.warmUpGpu();
+    gpuWarmUp.queueMapWarmUp();
   },
 
   onJoinedMidgame(data) {
@@ -258,8 +185,8 @@ const net = new NetworkManager(scene, {
     ui.lobbyScreen.classList.add('hidden');
     ui.hudScreen.classList.remove('hidden');
     hud.showToast('Partida en curso: modo espectador hasta la siguiente ronda');
-    warmUpGpu();
-    queueMapWarmUp();
+    gpuWarmUp.warmUpGpu();
+    gpuWarmUp.queueMapWarmUp();
   },
 
   onWorldTick(snapshot) {
@@ -536,17 +463,9 @@ lobby.bindControls({
   }
 });
 
-const clock = new THREE.Clock();
 let minimapAccum = 0;
 
-function animate() {
-  requestAnimationFrame(animate);
-  renderFrame();
-}
-
-function renderFrame() {
-  const dt = Math.min(0.05, clock.getDelta());
-  const elapsed = clock.elapsedTime;
+function renderFrame(dt, elapsed) {
 
   world.update(dt, elapsed, planeState, stormState, localPlayer);
   localPlayer.update(dt, currentMap, planeState, world, net.getRemoteEntityList());
@@ -568,19 +487,21 @@ function renderFrame() {
   }
 
   world.updateRenderBudget(localPlayer, camera, dt);
-  const warming = warmQueue.length > 0;
-  if (warming) beginWarmBatch();
+  const warming = gpuWarmUp.isPending();
+  if (warming) gpuWarmUp.beginWarmBatch();
   const renderStart = warming ? performance.now() : 0;
   renderer.render(scene, camera);
-  if (warming) adaptWarmRate(performance.now() - renderStart);
-  endWarmBatch();
+  if (warming) gpuWarmUp.adaptWarmRate(performance.now() - renderStart);
+  gpuWarmUp.endWarmBatch();
   localPlayer.renderViewmodel(renderer);
 }
 
+const frameLoop = createFrameLoop(renderFrame);
+
 if (window.__cocoro) {
   // Permite avanzar fotogramas a mano desde la consola aunque la pestaña esté en segundo plano
-  window.__cocoro.renderFrame = renderFrame;
+  window.__cocoro.renderFrame = frameLoop.step;
   window.__cocoro.net = net;
 }
 
-animate();
+frameLoop.start();

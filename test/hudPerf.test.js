@@ -15,7 +15,7 @@ import {
   invalidateHudSensors,
   createDamageFlashState,
   triggerDamageFlash
-} from '../client/js/hudUpdater.js';
+} from '../client/js/ui/hudUpdater.js';
 
 // Importación relativa alternativa si Node no resuelve ruta raíz '/shared/config.js'
 test('CLIENT_PERF_CONFIG define frecuencia de 10 Hz para sensores del HUD', () => {

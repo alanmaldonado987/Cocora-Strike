@@ -1,4 +1,4 @@
-// client/js/hudUpdater.js
+// client/js/ui/hudUpdater.js
 // Utilidades puras sin allocaciones para dirty-checking del DOM en updateHUD,
 // limitador de frecuencia (throttling a 10 Hz) de sensores y control limpio de temporizadores.
 

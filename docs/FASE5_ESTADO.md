@@ -32,7 +32,7 @@ Regla: **extraer y organizar código sin cambiar comportamiento**. Un dominio po
 ### 1. Cliente (`client/js/`)
 - [x] `net/` — network.js, interpolation.js, prediction.js (prediction = métodos de reconciliación mezclados en `LocalPlayerController` vía `core/mixin.js`)
 - [x] `audio/` — audio.js
-- [ ] `ui/` — hud.js, minimap.js, lobby.js, killfeed.js
+- [x] `ui/` — hud.js, minimap.js, lobby.js, killfeed.js (+ `elements.js` con el mapa de nodos DOM y `hudUpdater.js` movido desde `client/js/`)
 - [ ] `core/` — loop.js (paso fijo), quality.js, input.js
 - [ ] `player/` — avatar.js, animation.js, viewmodel.js, camera.js, controller.js, weapons.js
 - [ ] `world/` — terrain.js, foliage.js, structures.js, water.js, sky.js, lights.js, effects.js, loot.js, wildlife.js, materials.js
@@ -61,3 +61,4 @@ Regla: **extraer y organizar código sin cambiar comportamiento**. Un dominio po
 | Infraestructura | `docs/FASE5_ESTADO.md`, `test/importGraph.test.js`, `package.json` | 82 pruebas en verde |
 | net | `client/js/net/{network,interpolation,prediction}.js`, `client/js/core/mixin.js`; imports en `main.js`, `world.js`, `player.js` y tests | 82 pruebas; humo OK |
 | audio | `client/js/audio.js` → `client/js/audio/audio.js`; imports en `main.js` y `test/audioEngine.test.js` | 82 pruebas |
+| ui | `client/js/ui/{elements,hud,hudUpdater,minimap,lobby,killfeed}.js` (fábricas con dependencias inyectadas); `main.js` delega HUD, minimapa, killfeed, lobby y pantalla final; `test/hudPerf.test.js` | 82 pruebas; humo OK |

@@ -5,52 +5,28 @@
 
 import * as THREE from 'three';
 import {
-  WATER_LEVEL,
-  GRID_SIZE,
-  WORLD_HALF,
   DEFAULT_MAP_SEED,
-  SURFACE,
-  WEAPONS,
   LOOT_TYPES,
-  PARACHUTE_CONFIG,
-  PLAYER_EYE_HEIGHT,
-  PLAYER_CROUCH_EYE_HEIGHT,
-  PLAYER_SLIDE_EYE_HEIGHT,
   SWIM_CONFIG,
   CLIENT_PERF_CONFIG,
   AUDIO_CONFIG
 } from '/shared/mapData.js';
 import { SoundEngine } from './audio/audio.js';
 import { VoxelWorld } from './world.js';
-import { AVATAR_COLORS, LocalPlayerController, requestRawPointerLock } from './player.js';
+import { LocalPlayerController, requestRawPointerLock } from './player.js';
 import { NetworkManager } from './net/network.js';
 import {
   createHudCache,
   resetHudCache,
-  setTextIfChanged,
-  setStyleIfChanged,
-  toggleClassIfChanged,
-  setAttrIfChanged,
-  setDatasetIfChanged,
-  updateWeaponSlotIfChanged,
   createHudSensorState,
-  invalidateHudSensors,
-  stepHudSensorThrottle,
-  createDamageFlashState,
-  triggerDamageFlash
-} from './hudUpdater.js';
+  invalidateHudSensors
+} from './ui/hudUpdater.js';
+import { queryUiElements } from './ui/elements.js';
+import { createHud } from './ui/hud.js';
+import { createMinimap } from './ui/minimap.js';
+import { createKillfeed } from './ui/killfeed.js';
+import { createLobby } from './ui/lobby.js';
 import { preloadExternalModelAssets } from '/Modelos%203D/cocoraModels.js';
-
-const WEAPON_SVG_PATHS = {
-  fists: 'M12 25 L28 23 L32 18 L106 14 L112 19 L32 25 L28 29 L12 29 Z',
-  pistol: 'M32 12 L86 12 L86 19 L54 19 L48 33 L36 33 L41 19 L32 19 Z',
-  revolver: 'M28 15 L44 15 L48 11 L66 11 L68 14 L94 14 L94 18 L68 18 L66 23 L50 23 L45 34 L34 33 L40 22 L28 19 Z',
-  shotgun: 'M8 22 L28 16 L112 16 L112 20 L62 20 L58 24 L34 24 L20 31 L8 29 Z',
-  smg: 'M20 15 L96 15 L96 19 L74 19 L74 28 L68 28 L68 20 L54 20 L56 34 L49 34 L47 20 L34 20 L30 31 L22 31 L26 19 L20 19 Z',
-  assault_rifle: 'M8 18 L26 17 L28 14 L52 14 L55 10 L69 10 L71 14 L112 14 L112 18 L74 18 L70 22 L59 22 L61 34 L53 34 L51 22 L38 22 L33 32 L26 32 L30 22 L10 25 Z',
-  rifle: 'M6 21 L26 16 L46 14 L112 15 L112 18 L78 18 L74 22 L58 22 L63 34 L54 35 L50 22 L36 22 L31 32 L24 32 L28 22 L6 26 Z',
-  sniper: 'M4 21 L26 17 L48 17 L50 11 L78 11 L80 17 L116 17 L116 20 L74 20 L66 24 L56 32 L49 32 L53 22 L28 22 L8 27 Z'
-};
 
 const container = document.getElementById('game-container');
 const scene = new THREE.Scene();
@@ -159,714 +135,39 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-const ui = {
-  btnMute: document.getElementById('btn-mute'),
-  lobbyScreen: document.getElementById('lobby-screen'),
-  lanBanner: document.getElementById('lan-url-banner'),
-  joinPanel: document.getElementById('join-panel'),
-  waitingPanel: document.getElementById('waiting-panel'),
-  nicknameInput: document.getElementById('nickname-input'),
-  btnJoin: document.getElementById('btn-join-lobby'),
-  lobbyCount: document.getElementById('lobby-count'),
-  lobbyCountdown: document.getElementById('lobby-countdown'),
-  lobbyPlayersList: document.getElementById('lobby-players-list'),
-  botDifficultySelect: document.getElementById('bot-difficulty-select'),
-  botCountSelect: document.getElementById('bot-count-select'),
-  aircraftTypeSelect: document.getElementById('aircraft-type-select'),
-  btnAddBot: document.getElementById('btn-add-bot'),
-  btnClearBots: document.getElementById('btn-clear-bots'),
-  btnStartSolo: document.getElementById('btn-start-solo'),
-  btnStartMatch: document.getElementById('btn-start-match'),
-
-  hudScreen: document.getElementById('hud-screen'),
-  sniperScopeOverlay: document.getElementById('sniper-scope-overlay'),
-  minimapCanvas: document.getElementById('minimap-canvas'),
-  stormPhaseText: document.getElementById('storm-phase-text'),
-  stormTimerText: document.getElementById('storm-timer-text'),
-  stormWarning: document.getElementById('storm-warning'),
-  stormVignette: document.getElementById('storm-vignette'),
-  damageFlash: document.getElementById('damage-flash'),
-  aliveCount: document.getElementById('alive-count'),
-  killsCount: document.getElementById('kills-count'),
-  killfeed: document.getElementById('killfeed'),
-  actionBanner: document.getElementById('action-banner'),
-  pointerPrompt: document.getElementById('pointer-prompt'),
-  crosshair: document.getElementById('crosshair'),
-  hitmarker: document.getElementById('hitmarker'),
-  floatingDmgLayer: document.getElementById('floating-dmg-layer'),
-  targetHud: document.getElementById('target-hud'),
-  targetHudName: document.getElementById('target-hud-name'),
-  targetHudHp: document.getElementById('target-hud-hp'),
-  targetHudFill: document.getElementById('target-hud-fill'),
-  statusToast: document.getElementById('status-toast'),
-  interactPrompt: document.getElementById('interact-prompt'),
-  healWrap: document.getElementById('heal-bar-wrap'),
-  healLabel: document.getElementById('heal-bar-label'),
-  healTimer: document.getElementById('heal-bar-timer'),
-  healFill: document.getElementById('heal-bar-fill'),
-
-  hpFill: document.getElementById('hp-fill'),
-  hpText: document.getElementById('hp-text'),
-  breathBar: document.getElementById('breath-bar'),
-  breathFill: document.getElementById('breath-fill'),
-  drownWarning: document.getElementById('drown-warning'),
-  medkitCount: document.getElementById('medkit-count'),
-  bandageCount: document.getElementById('bandage-count'),
-  stealthBadge: document.getElementById('stealth-badge'),
-  reloadWrap: document.getElementById('reload-bar-wrap'),
-  reloadFill: document.getElementById('reload-bar-fill'),
-  weaponName: document.getElementById('weapon-name'),
-  weaponIconPath: document.getElementById('weapon-icon-path'),
-  weaponChargeFill: document.getElementById('weapon-charge-fill'),
-  ammoCurrent: document.getElementById('ammo-current'),
-  ammoReserve: document.getElementById('ammo-reserve'),
-  slotFists: document.getElementById('slot-fists'),
-  slotPistol: document.getElementById('slot-pistol'),
-  slotRevolver: document.getElementById('slot-revolver'),
-  slotShotgun: document.getElementById('slot-shotgun'),
-  slotSmg: document.getElementById('slot-smg'),
-  slotAssaultRifle: document.getElementById('slot-assault-rifle'),
-  slotRifle: document.getElementById('slot-rifle'),
-  slotSniper: document.getElementById('slot-sniper'),
-
-  gameoverScreen: document.getElementById('gameover-screen'),
-  gameoverTitle: document.getElementById('gameover-title'),
-  gameoverWinner: document.getElementById('gameover-winner'),
-  gameoverRanking: document.getElementById('gameover-ranking'),
-  btnBackLobby: document.getElementById('btn-back-lobby')
-};
+const ui = queryUiElements();
 
 let planeState = null;
 let stormState = null;
 let myNickname = '';
-let currentInteractable = null;
-let hitmarkerTimeout = null;
-let toastTimeout = null;
-let targetHudTimeout = null;
 const hudCache = createHudCache();
 const hudSensorState = createHudSensorState(CLIENT_PERF_CONFIG.hudSensorIntervalSec);
-const damageFlashState = createDamageFlashState();
-const projVec = new THREE.Vector3();
-const hudLookDir = new THREE.Vector3();
+const getMap = () => currentMap;
+const getPlaneState = () => planeState;
+const getStormState = () => stormState;
+const hud = createHud({ ui, localPlayer, camera, world, hudCache, hudSensorState, getMap, getPlaneState, getStormState });
+const minimap = createMinimap({ canvas: ui.minimapCanvas, world, localPlayer, getStormState, getPlaneState });
+minimap.bake(currentMap);
+const killfeed = createKillfeed(ui.killfeed);
+const lobby = createLobby({ ui, getSelfId: () => net.selfId });
 const audioLookDir = new THREE.Vector3();
-
-const minimapBg = document.createElement('canvas');
-minimapBg.width = 176;
-minimapBg.height = 176;
-const minimapCtx = ui.minimapCanvas.getContext('2d');
-
-function bakeMinimapTerrain(mapData) {
-  const ctx = minimapBg.getContext('2d');
-  const size = minimapBg.width;
-  ctx.clearRect(0, 0, size, size);
-
-  const V = GRID_SIZE + 1;
-  const cell = size / GRID_SIZE;
-
-  for (let gz = 0; gz < GRID_SIZE; gz += 2) {
-    for (let gx = 0; gx < GRID_SIZE; gx += 2) {
-      const surf = mapData.surfaceGrid[gz * V + gx];
-      const h = mapData.heightGrid[gz * V + gx];
-
-      if (surf === SURFACE.RIVER_BED) ctx.fillStyle = WATER_LEVEL - h > 2.65 ? '#0e8aa8' : '#18b8d4';
-      else if (surf === SURFACE.RIVER_SAND) ctx.fillStyle = '#ded09c';
-      else if (surf === SURFACE.DIRT_TRAIL) ctx.fillStyle = '#b58250';
-      else if (surf === SURFACE.SCORCHED_EARTH) ctx.fillStyle = '#382c25';
-      else if (surf === SURFACE.LUMBER_EARTH) ctx.fillStyle = '#8b5e34';
-      else if (surf === SURFACE.RUINS_STONE) ctx.fillStyle = '#78716c';
-      else if (surf === SURFACE.CAVE_ROCK) ctx.fillStyle = '#475569';
-      else if (surf === SURFACE.COFFEE_TERRACE) ctx.fillStyle = '#5a4b2c';
-      else if (surf === SURFACE.TOWN_COBBLESTONE) ctx.fillStyle = '#94a3b8';
-      else if (surf === SURFACE.ROCK_CLIFF) ctx.fillStyle = '#64748b';
-      else if (h >= 24) ctx.fillStyle = '#256035';
-      else ctx.fillStyle = '#3ca346';
-
-      ctx.fillRect(gx * cell, gz * cell, Math.ceil(cell * 2), Math.ceil(cell * 2));
-    }
-  }
-
-  const toPx = (val) => ((val + WORLD_HALF) / (WORLD_HALF * 2)) * size;
-
-  // Puentes arqueados de piedra
-  ctx.fillStyle = '#cbd5e1';
-  for (const br of mapData.bridges) {
-    const bw = Math.max(8, ((br.totalHalf || br.spanHalf) * 2 / (WORLD_HALF * 2)) * size);
-    ctx.fillRect(toPx(br.x) - bw * 0.5, toPx(br.z) - 2, bw, 4);
-  }
-
-  // Monumento COCORA
-  if (mapData.cocoraMonument) {
-    ctx.fillStyle = '#fef08a';
-    ctx.fillRect(toPx(mapData.cocoraMonument.x) - 5, toPx(mapData.cocoraMonument.z) - 2, 10, 4);
-  }
-
-  // Helicóptero estrellado
-  if (mapData.helicopterWreck) {
-    ctx.fillStyle = '#f97316';
-    ctx.beginPath();
-    ctx.arc(toPx(mapData.helicopterWreck.x), toPx(mapData.helicopterWreck.z), 3.4, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Casas Paisas
-  ctx.fillStyle = '#ea580c';
-  for (const b of mapData.buildings) {
-    const bw = Math.max(3, (b.w / (WORLD_HALF * 2)) * size);
-    const bd = Math.max(3, (b.d / (WORLD_HALF * 2)) * size);
-    ctx.fillRect(toPx(b.x) - bw * 0.5, toPx(b.z) - bd * 0.5, bw, bd);
-  }
-
-  // Retícula sutil tipo radar
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(size * 0.5, 0);
-  ctx.lineTo(size * 0.5, size);
-  ctx.moveTo(0, size * 0.5);
-  ctx.lineTo(size, size * 0.5);
-  ctx.arc(size * 0.5, size * 0.5, size * 0.30, 0, Math.PI * 2);
-  ctx.stroke();
-}
-bakeMinimapTerrain(currentMap);
-
-function drawMinimap(elapsedSec = 0) {
-  const size = ui.minimapCanvas.width;
-  minimapCtx.drawImage(minimapBg, 0, 0);
-
-  const toMapCoord = (worldVal) => ((worldVal + WORLD_HALF) / (WORLD_HALF * 2)) * size;
-
-  if (stormState) {
-    const cx = toMapCoord(stormState.centerX);
-    const cz = toMapCoord(stormState.centerZ);
-    const r = (stormState.radius / (WORLD_HALF * 2)) * size;
-    const tr = (stormState.targetRadius / (WORLD_HALF * 2)) * size;
-
-    // Sombreado púrpura de la tormenta exterior en el minimapa
-    minimapCtx.save();
-    minimapCtx.beginPath();
-    minimapCtx.rect(0, 0, size, size);
-    minimapCtx.arc(cx, cz, Math.max(1, r), 0, Math.PI * 2, true);
-    minimapCtx.fillStyle = 'rgba(126, 34, 206, 0.36)';
-    minimapCtx.fill();
-    minimapCtx.restore();
-
-    minimapCtx.strokeStyle = 'rgba(255,255,255,0.65)';
-    minimapCtx.lineWidth = 1.2;
-    minimapCtx.beginPath();
-    minimapCtx.arc(cx, cz, Math.max(1, tr), 0, Math.PI * 2);
-    minimapCtx.stroke();
-
-    minimapCtx.strokeStyle = '#c084fc';
-    minimapCtx.lineWidth = 2.4;
-    minimapCtx.beginPath();
-    minimapCtx.arc(cx, cz, Math.max(1, r), 0, Math.PI * 2);
-    minimapCtx.stroke();
-  }
-
-  // Línea sutil de barrido radar
-  const sweepAng = elapsedSec * 1.4;
-  minimapCtx.strokeStyle = 'rgba(74, 222, 128, 0.25)';
-  minimapCtx.lineWidth = 1.4;
-  minimapCtx.beginPath();
-  minimapCtx.moveTo(size * 0.5, size * 0.5);
-  minimapCtx.lineTo(size * 0.5 + Math.cos(sweepAng) * size * 0.5, size * 0.5 + Math.sin(sweepAng) * size * 0.5);
-  minimapCtx.stroke();
-
-  if (planeState && planeState.active && world.planeMesh.visible) {
-    const px = toMapCoord(world.planeMesh.position.x);
-    const pz = toMapCoord(world.planeMesh.position.z);
-    minimapCtx.fillStyle = '#facc15';
-    minimapCtx.beginPath();
-    minimapCtx.arc(px, pz, 4, 0, Math.PI * 2);
-    minimapCtx.fill();
-  }
-
-  if (localPlayer.active && localPlayer.alive) {
-    const mx = toMapCoord(localPlayer.x);
-    const mz = toMapCoord(localPlayer.z);
-    minimapCtx.save();
-    minimapCtx.translate(mx, mz);
-    minimapCtx.rotate(-localPlayer.yaw + Math.PI);
-
-    // Cono de visión + Flecha direccional blanca con borde oscuro
-    minimapCtx.fillStyle = 'rgba(250, 204, 21, 0.20)';
-    minimapCtx.beginPath();
-    minimapCtx.moveTo(0, 0);
-    minimapCtx.lineTo(-9, -18);
-    minimapCtx.lineTo(9, -18);
-    minimapCtx.closePath();
-    minimapCtx.fill();
-
-    minimapCtx.fillStyle = '#ffffff';
-    minimapCtx.strokeStyle = '#090d16';
-    minimapCtx.lineWidth = 1.8;
-    minimapCtx.beginPath();
-    minimapCtx.moveTo(0, -6.5);
-    minimapCtx.lineTo(5.2, 5.2);
-    minimapCtx.lineTo(0, 2.6);
-    minimapCtx.lineTo(-5.2, 5.2);
-    minimapCtx.closePath();
-    minimapCtx.fill();
-    minimapCtx.stroke();
-    minimapCtx.restore();
-  }
-}
-
-const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>"']/g, (ch) => HTML_ESCAPES[ch]);
-}
-
-function showToast(msg) {
-  ui.statusToast.textContent = msg;
-  ui.statusToast.classList.remove('hidden');
-  clearTimeout(toastTimeout);
-  toastTimeout = setTimeout(() => ui.statusToast.classList.add('hidden'), 2200);
-}
-
-function spawnFloatingDamage(hitPoint, damage, isCrit = false) {
-  if (!ui.floatingDmgLayer || !hitPoint) return;
-  projVec.set(hitPoint.x, hitPoint.y + 0.4, hitPoint.z);
-  projVec.project(camera);
-
-  let sx = (projVec.x * 0.5 + 0.5) * window.innerWidth;
-  let sy = (-projVec.y * 0.5 + 0.5) * window.innerHeight;
-  if (projVec.z > 1) {
-    sx = window.innerWidth * 0.5;
-    sy = window.innerHeight * 0.46;
-  }
-
-  const el = document.createElement('div');
-  el.className = `dmg-pop${isCrit ? ' crit' : ''}`;
-  el.style.left = `${sx + (Math.random() - 0.5) * 24}px`;
-  el.style.top = `${sy}px`;
-  el.textContent = isCrit ? `-${damage} ★` : `-${damage}`;
-  ui.floatingDmgLayer.appendChild(el);
-  setTimeout(() => el.remove(), 750);
-}
-
-function showEnemyHealthFeedback(name, hp, maxHp = 100) {
-  if (!ui.targetHud) return;
-  const clampedHp = Math.max(0, Math.ceil(hp));
-  const pct = Math.max(0, Math.min(100, (clampedHp / (maxHp || 100)) * 100));
-
-  ui.targetHudName.textContent = name || 'Enemigo';
-  ui.targetHudHp.textContent = `${clampedHp} / ${maxHp}`;
-  ui.targetHudFill.style.width = `${pct}%`;
-  ui.targetHudFill.style.background =
-    pct > 55
-      ? 'linear-gradient(90deg, #16a34a, #4ade80)'
-      : pct > 25
-      ? 'linear-gradient(90deg, #f59e0b, #fbbf24)'
-      : 'linear-gradient(90deg, #dc2626, #ef4444)';
-
-  ui.targetHud.classList.remove('hidden');
-  clearTimeout(targetHudTimeout);
-  targetHudTimeout = setTimeout(() => ui.targetHud.classList.add('hidden'), 2200);
-}
-
-function addKillfeedItem(killer, victim, reason) {
-  const div = document.createElement('div');
-  div.className = 'kill-item';
-  if (reason === 'storm') {
-    div.textContent = `⚡ La Tormenta consumió a ${victim}`;
-  } else if (reason === 'bear') {
-    div.textContent = `🐻 Un Oso de Anteojos abatió a ${victim}`;
-  } else if (reason === 'jaguar') {
-    div.textContent = `🐆 Un Jaguar Colombiano cazó a ${victim}`;
-  } else if (reason === 'fall') {
-    div.textContent = `⛰️ ${victim} cayó desde gran altura`;
-  } else if (reason === 'drown') {
-    div.textContent = `🌊 ${victim} se ahogó en el río Quindío`;
-  } else {
-    div.textContent = `🎯 ${killer} eliminó a ${victim}`;
-  }
-  ui.killfeed.prepend(div);
-  setTimeout(() => div.remove(), 5500);
-}
-
-function flashDamage(colorRgba = 'rgba(239, 68, 68, 0.65)') {
-  triggerDamageFlash(
-    damageFlashState,
-    ui.damageFlash,
-    colorRgba,
-    CLIENT_PERF_CONFIG.damageFlashDurationMs
-  );
-}
-
-function showHitmarker(isHeadshot = false) {
-  ui.hitmarker.classList.remove('hidden');
-  ui.hitmarker.classList.toggle('headshot', Boolean(isHeadshot));
-  clearTimeout(hitmarkerTimeout);
-  hitmarkerTimeout = setTimeout(() => ui.hitmarker.classList.add('hidden'), 150);
-}
-
-const HP_GRAD_HIGH = 'linear-gradient(90deg, #16a34a, #22c55e, #4ade80)';
-const HP_GRAD_MID = 'linear-gradient(90deg, #d97706, #f59e0b)';
-const HP_GRAD_LOW = 'linear-gradient(90deg, #b91c1c, #ef4444)';
-
-function updateSlotClass(el, weaponKey) {
-  if (!el) return;
-  const unlocked = Boolean(localPlayer.weapons[weaponKey]?.unlocked);
-  const active = localPlayer.equipped === weaponKey;
-  updateWeaponSlotIfChanged(hudCache, `slot_${weaponKey}`, el, unlocked, active);
-}
-
-function updateHUD(dt = 0.016) {
-  if (!localPlayer.active) return;
-
-  const hpPct = Math.round(Math.max(0, Math.min(100, localPlayer.hp)) * 10) / 10;
-  if (hudCache.hpPct !== hpPct) {
-    hudCache.hpPct = hpPct;
-    ui.hpFill.style.width = `${hpPct}%`;
-  }
-  const hpGrad = hpPct > 45 ? HP_GRAD_HIGH : hpPct > 22 ? HP_GRAD_MID : HP_GRAD_LOW;
-  setStyleIfChanged(hudCache, 'hpBg', ui.hpFill, 'background', hpGrad);
-
-  const hpCeil = Math.ceil(localPlayer.hp);
-  if (hudCache.hpCeil !== hpCeil) {
-    hudCache.hpCeil = hpCeil;
-    setTextIfChanged(hudCache, 'hpText', ui.hpText, `${hpCeil}/100`);
-  }
-
-  // Aliento: visible nadando o mientras se recupera; aviso al ahogarse
-  const breath = Math.max(0, Math.min(SWIM_CONFIG.maxBreath, localPlayer.breath ?? SWIM_CONFIG.maxBreath));
-  const showBreath = Boolean(localPlayer.alive && (localPlayer.isSwimming || breath < SWIM_CONFIG.maxBreath));
-  toggleClassIfChanged(hudCache, 'breathHidden', ui.breathBar, 'hidden', !showBreath);
-  if (showBreath && ui.breathFill) {
-    const breathPct = Math.round(((breath / SWIM_CONFIG.maxBreath) * 100) * 2) / 2;
-    if (hudCache.breathPct !== breathPct) {
-      hudCache.breathPct = breathPct;
-      ui.breathFill.style.width = `${breathPct}%`;
-    }
-    toggleClassIfChanged(hudCache, 'breathLow', ui.breathFill, 'low', breath < 30);
-  }
-  const drowning = Boolean(localPlayer.alive && localPlayer.isSwimming && breath <= 0);
-  toggleClassIfChanged(hudCache, 'drownHidden', ui.drownWarning, 'hidden', !drowning);
-
-  if (hudCache.medkits !== localPlayer.medkits) {
-    hudCache.medkits = localPlayer.medkits;
-    setTextIfChanged(hudCache, 'medkitText', ui.medkitCount, String(localPlayer.medkits));
-  }
-  if (ui.bandageCount && hudCache.bandages !== localPlayer.bandages) {
-    hudCache.bandages = localPlayer.bandages;
-    setTextIfChanged(hudCache, 'bandageText', ui.bandageCount, String(localPlayer.bandages));
-  }
-  if (hudCache.kills !== localPlayer.kills) {
-    hudCache.kills = localPlayer.kills;
-    setTextIfChanged(hudCache, 'killsText', ui.killsCount, String(localPlayer.kills));
-  }
-
-  // Consultas contextuales pesadas (isConcealedInBush + findBestInteractable) limitadas a máximo 10 Hz
-  const canSenseGround = Boolean(localPlayer.alive && localPlayer.state === 'ground');
-  if (stepHudSensorThrottle(hudSensorState, dt, canSenseGround)) {
-    hudSensorState.concealed = Boolean(
-      currentMap &&
-        (localPlayer.isCrouching || localPlayer.isSliding) &&
-        currentMap.isConcealedInBush(localPlayer.x, localPlayer.z)
-    );
-
-    if (ui.interactPrompt) {
-      camera.getWorldDirection(hudLookDir);
-      const eyeH = localPlayer.isSliding
-        ? PLAYER_SLIDE_EYE_HEIGHT
-        : localPlayer.isCrouching
-        ? PLAYER_CROUCH_EYE_HEIGHT
-        : PLAYER_EYE_HEIGHT;
-      const found = world.findBestInteractable(
-        localPlayer.x,
-        localPlayer.y,
-        localPlayer.z,
-        localPlayer.y + eyeH,
-        hudLookDir.x,
-        hudLookDir.y,
-        hudLookDir.z
-      );
-      hudSensorState.interactable = found;
-    }
-  } else if (canSenseGround && !(localPlayer.isCrouching || localPlayer.isSliding)) {
-    // Salir de sigilo visualmente al instante si deja de agacharse/deslizarse sin esperar 100 ms
-    hudSensorState.concealed = false;
-  }
-
-  currentInteractable = hudSensorState.interactable;
-
-  if (ui.stealthBadge) {
-    toggleClassIfChanged(hudCache, 'stealthHidden', ui.stealthBadge, 'hidden', !hudSensorState.concealed);
-  }
-
-  if (ui.interactPrompt) {
-    const showInteract = Boolean(canSenseGround && currentInteractable);
-    if (showInteract) {
-      setTextIfChanged(hudCache, 'interactText', ui.interactPrompt, currentInteractable.promptText);
-    }
-    toggleClassIfChanged(hudCache, 'interactHidden', ui.interactPrompt, 'hidden', !showInteract);
-  }
-
-  const wKey = localPlayer.equipped || 'fists';
-  const wSpec = WEAPONS[wKey] || WEAPONS.fists;
-  const wState = localPlayer.weapons[wKey];
-  if (hudCache.weaponKey !== wKey) {
-    hudCache.weaponKey = wKey;
-    setTextIfChanged(hudCache, 'weaponName', ui.weaponName, wSpec.name.toUpperCase());
-    setAttrIfChanged(hudCache, 'weaponIconD', ui.weaponIconPath, 'd', WEAPON_SVG_PATHS[wKey] || WEAPON_SVG_PATHS.fists);
-  }
-
-  if (wSpec.magSize === 0) {
-    setTextIfChanged(hudCache, 'ammoCur', ui.ammoCurrent, '∞');
-    setTextIfChanged(hudCache, 'ammoRes', ui.ammoReserve, '');
-    setStyleIfChanged(hudCache, 'wChargeW', ui.weaponChargeFill, 'width', '100%');
-  } else {
-    const curMag = wState ? wState.mag : 0;
-    if (hudCache.ammoCurNum !== curMag) {
-      hudCache.ammoCurNum = curMag;
-      setTextIfChanged(hudCache, 'ammoCur', ui.ammoCurrent, String(curMag));
-    }
-    if (hudCache.ammoResNum !== localPlayer.reserveAmmo) {
-      hudCache.ammoResNum = localPlayer.reserveAmmo;
-      setTextIfChanged(hudCache, 'ammoRes', ui.ammoReserve, `/${localPlayer.reserveAmmo}`);
-    }
-    if (ui.weaponChargeFill) {
-      const rawMagPct = localPlayer.reloading
-        ? Math.min(100, ((performance.now() - localPlayer.reloadStart) / Math.max(1, localPlayer.reloadDuration)) * 100)
-        : Math.max(0, Math.min(100, (curMag / wSpec.magSize) * 100));
-      const magPct = Math.round(rawMagPct * 2) / 2;
-      if (hudCache.magPct !== magPct) {
-        hudCache.magPct = magPct;
-        setStyleIfChanged(hudCache, 'wChargeW', ui.weaponChargeFill, 'width', `${magPct}%`);
-      }
-    }
-  }
-
-  updateSlotClass(ui.slotFists, 'fists');
-  updateSlotClass(ui.slotPistol, 'pistol');
-  updateSlotClass(ui.slotRevolver, 'revolver');
-  updateSlotClass(ui.slotShotgun, 'shotgun');
-  updateSlotClass(ui.slotSmg, 'smg');
-  updateSlotClass(ui.slotAssaultRifle, 'assault_rifle');
-  updateSlotClass(ui.slotRifle, 'rifle');
-  updateSlotClass(ui.slotSniper, 'sniper');
-
-  const isReloading = Boolean(localPlayer.reloading);
-  toggleClassIfChanged(hudCache, 'reloadHidden', ui.reloadWrap, 'hidden', !isReloading);
-  if (isReloading) {
-    const prog = Math.round(
-      Math.min(100, ((performance.now() - localPlayer.reloadStart) / Math.max(1, localPlayer.reloadDuration)) * 100)
-    );
-    if (hudCache.reloadProg !== prog) {
-      hudCache.reloadProg = prog;
-      setStyleIfChanged(hudCache, 'reloadW', ui.reloadFill, 'width', `${prog}%`);
-    }
-  }
-
-  if (ui.healWrap) {
-    const showHeal = Boolean(localPlayer.isHealing && localPlayer.alive);
-    toggleClassIfChanged(hudCache, 'healHidden', ui.healWrap, 'hidden', !showHeal);
-    if (showHeal) {
-      const elapsedHeal = performance.now() - localPlayer.healStart;
-      const dur = Math.max(1, localPlayer.healDuration);
-      const pctHeal = Math.round(Math.min(100, (elapsedHeal / dur) * 100));
-      const remTenths = Math.max(0, Math.round(((dur - elapsedHeal) / 1000) * 10));
-      const healLabel =
-        localPlayer.healItemType === 'bandage' ? '🧻 APLICANDO VENDA...' : '🩹 APLICANDO BOTIQUÍN...';
-      setTextIfChanged(hudCache, 'healLabel', ui.healLabel, healLabel);
-      if (hudCache.healRemTenths !== remTenths) {
-        hudCache.healRemTenths = remTenths;
-        setTextIfChanged(hudCache, 'healTimer', ui.healTimer, `${(remTenths / 10).toFixed(1)}s`);
-      }
-      if (hudCache.healPct !== pctHeal) {
-        hudCache.healPct = pctHeal;
-        setStyleIfChanged(hudCache, 'healW', ui.healFill, 'width', `${pctHeal}%`);
-      }
-    }
-  }
-
-  const sniperScoped = Boolean(localPlayer.isSniperScoped());
-  toggleClassIfChanged(hudCache, 'scopeHidden', ui.sniperScopeOverlay, 'hidden', !sniperScoped);
-
-  if (ui.crosshair) {
-    setDatasetIfChanged(hudCache, 'chWeapon', ui.crosshair, 'weapon', wKey);
-    const adsStr = localPlayer.aimingZoom && localPlayer.state === 'ground' ? 'true' : 'false';
-    setDatasetIfChanged(hudCache, 'chAds', ui.crosshair, 'ads', adsStr);
-    setStyleIfChanged(hudCache, 'chOpacity', ui.crosshair, 'opacity', sniperScoped ? '0' : '1');
-  }
-
-  if (!localPlayer.alive) {
-    setTextIfChanged(
-      hudCache,
-      'actionBannerText',
-      ui.actionBanner,
-      '💀 ELIMINADO — Observando el desenlace en el Valle del Cocora...'
-    );
-    toggleClassIfChanged(hudCache, 'actionBannerHidden', ui.actionBanner, 'hidden', false);
-  } else if (localPlayer.state === 'plane') {
-    const alt = Math.round(localPlayer.currentGroundClearance);
-    const rawLabel = planeState?.label || 'AC-130J Ghostrider';
-    const disembark = Boolean(localPlayer.isCabinDisembarking);
-    if (
-      hudCache.bannerMode !== 'plane' ||
-      hudCache.bannerAlt !== alt ||
-      hudCache.bannerPlaneLabel !== rawLabel ||
-      hudCache.bannerDisembark !== disembark
-    ) {
-      hudCache.bannerMode = 'plane';
-      hudCache.bannerAlt = alt;
-      hudCache.bannerPlaneLabel = rawLabel;
-      hudCache.bannerDisembark = disembark;
-      const airLabel = rawLabel.toUpperCase();
-      const text = disembark
-        ? `✈️ ${airLabel} · AVANZANDO POR LA BODEGA HACIA LA RAMPA...`
-        : `✈️ ${airLabel} (${alt}m) · [V] Vista Cabina/Exterior — Pulsa [ESPACIO] o [F] para desembarcar`;
-      setTextIfChanged(hudCache, 'actionBannerText', ui.actionBanner, text);
-    }
-    toggleClassIfChanged(hudCache, 'actionBannerHidden', ui.actionBanner, 'hidden', false);
-  } else if (localPlayer.state === 'skydiving') {
-    const alt = Math.round(localPlayer.currentGroundClearance);
-    const spdTenths = Math.round(localPlayer.currentDescentSpeed * 10);
-    if (hudCache.bannerMode !== 'skydiving' || hudCache.bannerAlt !== alt || hudCache.bannerSpd !== spdTenths) {
-      hudCache.bannerMode = 'skydiving';
-      hudCache.bannerAlt = alt;
-      hudCache.bannerSpd = spdTenths;
-      const spd = (spdTenths / 10).toFixed(1);
-      setTextIfChanged(
-        hudCache,
-        'actionBannerText',
-        ui.actionBanner,
-        `🦅 CAÍDA LIBRE · Alt: ${alt}m (Auto: ${PARACHUTE_CONFIG.autoDeployHeight}m) · ${spd} m/s — [ESPACIO]/[F] Paracaídas`
-      );
-    }
-    toggleClassIfChanged(hudCache, 'actionBannerHidden', ui.actionBanner, 'hidden', false);
-  } else if (localPlayer.state === 'parachuting') {
-    const alt = Math.round(localPlayer.currentGroundClearance);
-    const spdTenths = Math.round(localPlayer.currentDescentSpeed * 10);
-    if (hudCache.bannerMode !== 'parachuting' || hudCache.bannerAlt !== alt || hudCache.bannerSpd !== spdTenths) {
-      hudCache.bannerMode = 'parachuting';
-      hudCache.bannerAlt = alt;
-      hudCache.bannerSpd = spdTenths;
-      const spd = (spdTenths / 10).toFixed(1);
-      setTextIfChanged(
-        hudCache,
-        'actionBannerText',
-        ui.actionBanner,
-        `🪂 PARACAÍDAS ABIERTO · Alt: ${alt}m · Vel: ${spd} m/s — Planea con WASD`
-      );
-    }
-    toggleClassIfChanged(hudCache, 'actionBannerHidden', ui.actionBanner, 'hidden', false);
-  } else {
-    hudCache.bannerMode = 'ground';
-    toggleClassIfChanged(hudCache, 'actionBannerHidden', ui.actionBanner, 'hidden', true);
-  }
-
-  const showPointerPrompt = Boolean(
-    localPlayer.alive && !localPlayer.pointerLocked && ui.gameoverScreen.classList.contains('hidden')
-  );
-  toggleClassIfChanged(hudCache, 'pointerHidden', ui.pointerPrompt, 'hidden', !showPointerPrompt);
-
-  if (stormState) {
-    const dpsVal = stormState.dps || 1;
-    const phaseIdx = stormState.phaseIndex;
-    const stMode = stormState.state;
-    if (hudCache.stormState !== stMode || hudCache.stormPhase !== phaseIdx) {
-      hudCache.stormState = stMode;
-      hudCache.stormPhase = phaseIdx;
-      const label =
-        stMode === 'shrinking'
-          ? `⚡ Cerrando F${phaseIdx}`
-          : stMode === 'closed'
-          ? `⚡ Zona Cerrada`
-          : `Zona · Fase ${phaseIdx}`;
-      setTextIfChanged(hudCache, 'stormPhaseText', ui.stormPhaseText, label);
-    }
-
-    const secs = Math.max(0, stormState.timer || 0);
-    if (hudCache.stormSecs !== secs) {
-      hudCache.stormSecs = secs;
-      const mm = String(Math.floor(secs / 60)).padStart(2, '0');
-      const ss = String(secs % 60).padStart(2, '0');
-      setTextIfChanged(hudCache, 'stormTimerText', ui.stormTimerText, `${mm}:${ss}`);
-    }
-
-    const distCenter = Math.hypot(
-      localPlayer.x - stormState.centerX,
-      localPlayer.z - stormState.centerZ
-    );
-    const outside = Boolean(
-      localPlayer.alive && localPlayer.state !== 'plane' && distCenter > stormState.radius
-    );
-    if (outside && hudCache.stormWarnDps !== dpsVal) {
-      hudCache.stormWarnDps = dpsVal;
-      setTextIfChanged(
-        hudCache,
-        'stormWarningText',
-        ui.stormWarning,
-        `⚡ ¡FUERA DE LA ZONA SEGURA! (-${dpsVal} HP/s) · DIRÍGETE AL CÍRCULO BLANCO ⚡`
-      );
-    }
-    toggleClassIfChanged(hudCache, 'stormWarningHidden', ui.stormWarning, 'hidden', !outside);
-
-    const vigAlpha = Math.round(Math.min(1, (world.stormAtmosphereFactor || 0) * 1.05) * 100) / 100;
-    if (hudCache.stormVig !== vigAlpha) {
-      hudCache.stormVig = vigAlpha;
-      setStyleIfChanged(hudCache, 'stormVigOpacity', ui.stormVignette, 'opacity', String(vigAlpha));
-    }
-  }
-}
 
 const net = new NetworkManager(scene, {
   onNetworkInfo(info) {
-    if (ui.lanBanner && info.lanUrls && info.lanUrls.length > 0) {
-      ui.lanBanner.textContent = `🌐 Red Local Wi-Fi / LAN: ${info.lanUrls[0]}`;
-      ui.lanBanner.classList.remove('hidden');
-    }
+    lobby.showNetworkInfo(info);
   },
 
   onLobbyJoined() {
-    ui.joinPanel.classList.add('hidden');
-    ui.waitingPanel.classList.remove('hidden');
+    lobby.showWaitingRoom();
   },
 
   onLobbyState(data) {
-    ui.lobbyCount.textContent = String(data.players.length);
-
-    if (ui.botDifficultySelect && data.botDifficulty) {
-      ui.botDifficultySelect.value = data.botDifficulty;
-    }
-    if (ui.botCountSelect && typeof data.botCount === 'number') {
-      const optExists = Array.from(ui.botCountSelect.options).some(
-        (o) => Number(o.value) === data.botCount
-      );
-      if (optExists) ui.botCountSelect.value = String(data.botCount);
-    }
-    if (ui.aircraftTypeSelect && data.aircraftType) {
-      ui.aircraftTypeSelect.value = data.aircraftType;
-    }
-
-    if (data.countdown !== null) {
-      ui.lobbyCountdown.textContent = `⏱️ Despegue automático en ${data.countdown}s...`;
-    } else {
-      ui.lobbyCountdown.textContent =
-        data.players.length >= 2
-          ? '¡Sala lista! Inicia la partida o espera más jugadores en tu red Wi-Fi / LAN.'
-          : 'Elige la cantidad de Bots IA o comparte la dirección LAN para jugar con amigos.';
-    }
-
-    ui.lobbyPlayersList.innerHTML = '';
-    for (const p of data.players) {
-      const li = document.createElement('li');
-      li.className = 'player-chip';
-      const dotColor = AVATAR_COLORS[p.colorIdx % AVATAR_COLORS.length];
-      li.innerHTML = `
-        <span class="chip-dot" style="background:${dotColor}"></span>
-        <span>${escapeHtml(p.name)}</span>
-        <span class="chip-tag">${p.isBot ? 'BOT IA' : p.id === net.selfId ? 'TÚ' : 'LAN'}</span>
-      `;
-      ui.lobbyPlayersList.appendChild(li);
-    }
+    lobby.renderLobbyState(data);
   },
 
   onGameStarted(data) {
     currentMap = world.buildFromSeed(data.seed);
-    bakeMinimapTerrain(currentMap);
+    minimap.bake(currentMap);
     world.syncLoot(data.loot || []);
     world.syncDoors(data.doors || []);
     world.syncBrokenWindows(data.brokenWindows || []);
@@ -938,7 +239,7 @@ const net = new NetworkManager(scene, {
 
   onJoinedMidgame(data) {
     currentMap = world.buildFromSeed(data.seed);
-    bakeMinimapTerrain(currentMap);
+    minimap.bake(currentMap);
     world.syncLoot(data.loot || []);
     world.syncDoors(data.doors || []);
     world.syncBrokenWindows(data.brokenWindows || []);
@@ -956,7 +257,7 @@ const net = new NetworkManager(scene, {
 
     ui.lobbyScreen.classList.add('hidden');
     ui.hudScreen.classList.remove('hidden');
-    showToast('Partida en curso: modo espectador hasta la siguiente ronda');
+    hud.showToast('Partida en curso: modo espectador hasta la siguiente ronda');
     warmUpGpu();
     queueMapWarmUp();
   },
@@ -1038,7 +339,7 @@ const net = new NetworkManager(scene, {
       localPlayer.reserveAmmo = data.reserveAmmo;
       localPlayer.setEquippedWeaponVisual(localPlayer.equipped);
       const label = LOOT_TYPES[data.type]?.label || data.type;
-      showToast(`+ Recogido: ${label}`);
+      hud.showToast(`+ Recogido: ${label}`);
     }
   },
 
@@ -1066,20 +367,20 @@ const net = new NetworkManager(scene, {
   onPlayerDamaged(data) {
     if (data.attackerId === net.selfId && data.targetId !== net.selfId) {
       audio.playHitmarker(data.isHeadshot);
-      showHitmarker(data.isHeadshot);
-      spawnFloatingDamage(data.hitPoint, data.damage, data.isHeadshot);
-      showEnemyHealthFeedback(data.targetName, data.hp, data.maxHp || 100);
+      hud.showHitmarker(data.isHeadshot);
+      hud.spawnFloatingDamage(data.hitPoint, data.damage, data.isHeadshot);
+      hud.showEnemyHealthFeedback(data.targetName, data.hp, data.maxHp || 100);
     }
     if (data.targetId === net.selfId) {
       localPlayer.hp = data.hp;
       if (data.source === 'fall') {
         audio.playFallImpact(data.damage);
         localPlayer.triggerCameraShake(Math.min(0.45, 0.14 + data.damage * 0.004), 0.38);
-        flashDamage('rgba(220, 38, 38, 0.78)');
-        showToast(`⚠️ ¡Impacto por caída! (-${data.damage} HP)`);
+        hud.flashDamage('rgba(220, 38, 38, 0.78)');
+        hud.showToast(`⚠️ ¡Impacto por caída! (-${data.damage} HP)`);
       } else {
         audio.playDamage();
-        flashDamage('rgba(239, 68, 68, 0.65)');
+        hud.flashDamage('rgba(239, 68, 68, 0.65)');
       }
     }
   },
@@ -1088,9 +389,9 @@ const net = new NetworkManager(scene, {
     world.triggerWildlifeHitFlash(data.animalId, data.hp, data.maxHp);
     if (data.attackerId === net.selfId) {
       audio.playHitmarker(false);
-      showHitmarker(false);
-      spawnFloatingDamage(data.hitPoint, data.damage || 18, false);
-      showEnemyHealthFeedback(data.speciesName, data.hp, data.maxHp || 100);
+      hud.showHitmarker(false);
+      hud.spawnFloatingDamage(data.hitPoint, data.damage || 18, false);
+      hud.showEnemyHealthFeedback(data.speciesName, data.hp, data.maxHp || 100);
     }
   },
 
@@ -1099,7 +400,7 @@ const net = new NetworkManager(scene, {
     audio.playAnimalAlert(data.species, dist, data);
     if (data.targetId === net.selfId) {
       const icon = data.species === 'bear' ? '🐻' : '🐆';
-      showToast(`${icon} ¡${data.speciesName} enfurecido te persigue!`);
+      hud.showToast(`${icon} ¡${data.speciesName} enfurecido te persigue!`);
     }
   },
 
@@ -1111,12 +412,12 @@ const net = new NetworkManager(scene, {
   onWildlifeKilled(data) {
     world.removeWildlife(data.animalId);
     if (data.killerId === net.selfId) {
-      showToast(`🌿 ${data.speciesName} abatido (soltó suministros)`);
+      hud.showToast(`🌿 ${data.speciesName} abatido (soltó suministros)`);
     }
   },
 
   onPlayerEliminated(data) {
-    addKillfeedItem(data.killerName, data.victimName, data.reason);
+    killfeed.add(data.killerName, data.victimName, data.reason);
     if (data.victimId === net.selfId) {
       localPlayer.alive = false;
       localPlayer.endSlide();
@@ -1125,9 +426,9 @@ const net = new NetworkManager(scene, {
       localPlayer.isCrouching = false;
       localPlayer.state = 'dead';
       ui.sniperScopeOverlay?.classList.add('hidden');
-      showToast(`Fuiste eliminado por ${data.killerName}`);
+      hud.showToast(`Fuiste eliminado por ${data.killerName}`);
     } else if (data.killerId === net.selfId) {
-      showToast(`🔥 ¡Eliminaste a ${data.victimName}!`);
+      hud.showToast(`🔥 ¡Eliminaste a ${data.victimName}!`);
     }
   },
 
@@ -1156,10 +457,10 @@ const net = new NetworkManager(scene, {
     localPlayer.medkits = data.medkits;
     localPlayer.bandages = data.bandages ?? localPlayer.bandages;
     audio.playPickup();
-    flashDamage('rgba(16, 185, 129, 0.45)');
+    hud.flashDamage('rgba(16, 185, 129, 0.45)');
     const msg =
       data.itemType === 'bandage' ? '🧻 +20 Salud (Venda aplicada)' : '🩹 +50 Salud (Botiquín aplicado)';
-    showToast(msg);
+    hud.showToast(msg);
   },
 
   onGameOver(data) {
@@ -1172,25 +473,7 @@ const net = new NetworkManager(scene, {
     const iWon = data.winnerId === net.selfId;
     if (iWon) audio.playVictory();
 
-    ui.gameoverTitle.textContent = iWon
-      ? '🏆 ¡VICTORIA MAGISTRAL EN EL COCORA!'
-      : '🌄 PARTIDA FINALIZADA';
-    ui.gameoverWinner.textContent = `Campeón: ${data.winnerName} (${data.winnerKills} bajas)`;
-
-    ui.gameoverRanking.innerHTML = '';
-    for (const row of data.ranking || []) {
-      const tr = document.createElement('tr');
-      if (row.id === net.selfId) tr.style.background = 'rgba(34, 197, 94, 0.18)';
-      tr.innerHTML = `
-        <td><strong>#${escapeHtml(row.placement)}</strong></td>
-        <td>${escapeHtml(row.name)} ${row.id === net.selfId ? '(Tú)' : ''}</td>
-        <td>${row.isBot ? '🤖 Bot IA' : '🧑 Jugador'}</td>
-        <td><strong>${escapeHtml(row.kills)}</strong></td>
-      `;
-      ui.gameoverRanking.appendChild(tr);
-    }
-
-    ui.gameoverScreen.classList.remove('hidden');
+    lobby.renderGameOver(data, iWon);
   },
 
   onReturnedToLobby() {
@@ -1219,13 +502,14 @@ localPlayer.onReloadRequest = () => net.requestReload();
 localPlayer.onSwitchWeaponRequest = (w) => net.requestSwitchWeapon(w);
 localPlayer.onHealRequest = (itemType) => net.requestHeal(itemType);
 localPlayer.onCancelHealRequest = () => net.cancelHeal();
-localPlayer.onHealCancelledLocal = () => showToast('❌ Curación cancelada');
+localPlayer.onHealCancelledLocal = () => hud.showToast('❌ Curación cancelada');
 localPlayer.onSpawnHealParticles = (x, y, z) => world.spawnHealParticles(x, y, z);
 localPlayer.onSlideChange = (active) => net.sendSlideState(active);
 localPlayer.onSpawnSlideDust = (x, y, z, yaw) => world.spawnSlideDust(x, y, z, yaw);
 localPlayer.onSpawnWaterRipples = (x, z, moving, intensity) => world.spawnWaterRipples(x, z, moving, intensity);
 localPlayer.onBreakWindowRequest = (windowId) => net.requestBreakWindow(windowId);
 localPlayer.onInteractRequest = () => {
+  const currentInteractable = hud.getInteractable();
   if (!currentInteractable) return;
   if (currentInteractable.kind === 'loot') {
     net.requestPickup(currentInteractable.id);
@@ -1241,74 +525,15 @@ localPlayer.onCameraModeChanged = (mode) => {
     third: '🎥 Cámara: 3ra Persona Cel-Shaded',
     first: '🎥 Cámara: 1ra Persona Táctica'
   };
-  showToast(labels[mode] || '🎥 Vista cambiada');
+  hud.showToast(labels[mode] || '🎥 Vista cambiada');
 };
 
-function submitJoinLobby() {
-  audio.init();
-  const raw = ui.nicknameInput.value.trim();
-  myNickname = raw || `Arriero_${Math.floor(100 + Math.random() * 899)}`;
-  net.joinLobby(myNickname);
-}
-
-ui.btnJoin.addEventListener('click', submitJoinLobby);
-ui.nicknameInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') submitJoinLobby();
-});
-
-function sendBotConfigFromSelectors() {
-  audio.init();
-  const botDifficulty = ui.botDifficultySelect?.value || 'easy';
-  const botCount = Number(ui.botCountSelect?.value ?? 6);
-  const aircraftType = ui.aircraftTypeSelect?.value || 'auto';
-  net.configureBots({ botDifficulty, botCount, aircraftType });
-}
-
-ui.botDifficultySelect?.addEventListener('change', sendBotConfigFromSelectors);
-ui.botCountSelect?.addEventListener('change', sendBotConfigFromSelectors);
-ui.aircraftTypeSelect?.addEventListener('change', sendBotConfigFromSelectors);
-
-ui.btnAddBot.addEventListener('click', () => {
-  audio.init();
-  net.addBot();
-});
-
-ui.btnClearBots.addEventListener('click', () => {
-  audio.init();
-  if (ui.botCountSelect) ui.botCountSelect.value = '0';
-  net.clearBots();
-});
-
-ui.btnStartSolo.addEventListener('click', () => {
-  audio.init();
-  const botDifficulty = ui.botDifficultySelect?.value || 'easy';
-  const selectedBots = Math.max(1, Number(ui.botCountSelect?.value || 6));
-  const aircraftType = ui.aircraftTypeSelect?.value || 'auto';
-  net.startGame({ autoFillBots: true, botCount: selectedBots, botDifficulty, aircraftType });
-});
-
-ui.btnStartMatch.addEventListener('click', () => {
-  audio.init();
-  const botDifficulty = ui.botDifficultySelect?.value || 'easy';
-  const botCount = Number(ui.botCountSelect?.value ?? 6);
-  const aircraftType = ui.aircraftTypeSelect?.value || 'auto';
-  net.startGame({ autoFillBots: false, botCount, botDifficulty, aircraftType });
-});
-
-ui.btnBackLobby.addEventListener('click', () => {
-  audio.init();
-  net.resetLobby();
-});
-
-function handleToggleMute() {
-  const muted = audio.toggleMute();
-  ui.btnMute.textContent = muted ? '🔇 Silenciado' : '🔊 Audio ON';
-}
-
-ui.btnMute.addEventListener('click', handleToggleMute);
-window.addEventListener('keydown', (e) => {
-  if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'SELECT') return;
-  if (e.code === 'KeyM') handleToggleMute();
+lobby.bindControls({
+  audio,
+  net,
+  onNickname: (nickname) => {
+    myNickname = nickname;
+  }
 });
 
 const clock = new THREE.Clock();
@@ -1334,12 +559,12 @@ function renderFrame() {
   );
   net.sendPlayerState(localPlayer);
   net.updateInterpolation(dt, world, planeState, currentMap);
-  updateHUD(dt);
+  hud.update(dt);
 
   minimapAccum += dt;
   if (minimapAccum >= 0.05 && localPlayer.active) {
     minimapAccum = 0;
-    drawMinimap(elapsed);
+    minimap.draw(elapsed);
   }
 
   world.updateRenderBudget(localPlayer, camera, dt);

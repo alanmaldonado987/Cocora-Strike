@@ -1,6 +1,7 @@
 // shared/spatial.js
 // Índices espaciales cero-allocaciones para exclusión de props y consulta rápida de colisionadores.
 // Usa claves enteras biyectivas (Smi) y sellos monotónicos (queryStamp) con buffers reutilizables.
+// @ts-check
 
 import { SPATIAL_GRID_CONFIG } from './config.js';
 
@@ -17,6 +18,9 @@ export function encodeSpatialCellKey(cx, cz) {
   return ((((cx | 0) + CELL_OFFSET) << CELL_SHIFT) + ((cz | 0) + CELL_OFFSET)) | 0;
 }
 
+/**
+ * Rejilla de exclusión para colocar objetos sin solaparse (círculos en XZ).
+ */
 export class SpatialExclusionGrid {
   constructor(cellSize = 8) {
     this.cellSize = cellSize;
@@ -67,6 +71,9 @@ export class SpatialExclusionGrid {
   }
 }
 
+/**
+ * Índice espacial de colisionadores (cajas AABB y cilindros verticales) con consultas sin asignaciones.
+ */
 export class SpatialCollisionIndex {
   constructor(cellSize = 10) {
     this.cellSize = cellSize;

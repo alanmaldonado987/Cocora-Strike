@@ -1,5 +1,6 @@
 // shared/map/buildings.js
 // Estructuras del mapa: cuevas, puentes, edificios multinivel con puertas/ventanas/interiores, ruinas y POIs especiales.
+// @ts-check
 
 import {
   CELL_SIZE,

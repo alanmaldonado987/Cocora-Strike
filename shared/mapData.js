@@ -10,6 +10,7 @@
 // - physics/raycast.js    raycasts y línea de visión
 // - physics/vault.js      obstáculos saltables (parkour)
 // - physics/playerController.js  controlador cinemático determinista compartido
+// @ts-check
 export * from './config.js';
 export * from './math.js';
 export * from './spatial.js';

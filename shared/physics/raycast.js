@@ -1,9 +1,14 @@
 // shared/physics/raycast.js
 // Raycasts deterministas contra el mapa (terreno por rejilla + cajas y cilindros de colisión) y línea de visión.
 // Usados por disparos (servidor y predicción del cliente), visión de bots y cámara.
+// @ts-check
 
 import { WORLD_HALF } from '../config.js';
 
+/**
+ * Intersección rayo-caja alineada a ejes (método de las losas).
+ * @returns {number} distancia al impacto o -1
+ */
 function intersectRayBox3D(ox, oy, oz, dx, dy, dz, box, maxDist) {
   let tMin = 0.001;
   let tMax = maxDist;
@@ -47,6 +52,10 @@ function intersectRayBox3D(ox, oy, oz, dx, dy, dz, box, maxDist) {
   return tMin >= 0.001 && tMin <= maxDist ? tMin : -1;
 }
 
+/**
+ * Intersección rayo-cilindro vertical con tapas.
+ * @returns {number} distancia al impacto o -1
+ */
 function intersectRayCylinder3D(ox, oy, oz, dx, dy, dz, cyl, maxDist) {
   const rx = ox - cyl.x;
   const rz = oz - cyl.z;
@@ -87,6 +96,13 @@ function intersectRayCylinder3D(ox, oy, oz, dx, dy, dz, cyl, maxDist) {
   return hitT <= maxDist ? hitT : -1;
 }
 
+/**
+ * Raycast contra el terreno (marcha por la rejilla de alturas) y los colisionadores del mapa.
+ * @param {import('../mapGen.js').CocoraMap} map
+ * @param {{ x: number, y: number, z: number }} origin
+ * @param {{ x: number, y: number, z: number }} dir dirección normalizada
+ * @param {number} [maxDist]
+ */
 export function raycastVoxels(map, origin, dir, maxDist = 540) {
   const len = Math.hypot(dir.x, dir.y, dir.z) || 1;
   const dx = dir.x / len;
@@ -162,6 +178,14 @@ export function raycastVoxels(map, origin, dir, maxDist = 540) {
   };
 }
 
+/**
+ * ¿Hay línea de visión libre entre dos puntos? (tolerancia en metros al final del rayo).
+ * @param {import('../mapGen.js').CocoraMap} map
+ * @param {{ x: number, y: number, z: number }} fromPt
+ * @param {{ x: number, y: number, z: number }} toPt
+ * @param {number} [tolerance]
+ * @returns {boolean}
+ */
 export function hasLineOfSight(map, fromPt, toPt, tolerance = 0.12) {
   const dx = toPt.x - fromPt.x;
   const dy = toPt.y - fromPt.y;

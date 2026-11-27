@@ -1,5 +1,6 @@
 // shared/math.js
 // Utilidades numéricas deterministas: RNG con semilla, ruido 2D y conversión rejilla/mundo.
+// @ts-check
 
 import {
   CELL_SIZE,
@@ -9,6 +10,11 @@ import {
   ANIMATION_FEEL_CONFIG
 } from './config.js';
 
+/**
+ * Generador pseudoaleatorio determinista (mulberry32) a partir de una semilla entera.
+ * @param {number} seed
+ * @returns {() => number} función que devuelve valores en [0, 1)
+ */
 export function createRNG(seed) {
   let a = seed >>> 0;
   return function () {
@@ -20,6 +26,13 @@ export function createRNG(seed) {
   };
 }
 
+/**
+ * Hash entero 2D determinista normalizado a [0, 1).
+ * @param {number} ix
+ * @param {number} iz
+ * @param {number} seed
+ * @returns {number}
+ */
 export function hash2D(ix, iz, seed) {
   let n = Math.imul(ix, 374761393) + Math.imul(iz, 668265263) + Math.imul(seed, 1442695041);
   n = (n ^ (n >>> 13)) | 0;
@@ -27,6 +40,11 @@ export function hash2D(ix, iz, seed) {
   return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
 }
 
+/**
+ * Interpolación suave cúbica de t acotado a [0, 1].
+ * @param {number} t
+ * @returns {number}
+ */
 export function smoothstep(t) {
   const c = Math.max(0, Math.min(1, t));
   return c * c * (3 - 2 * c);
@@ -163,6 +181,10 @@ export function stepRecoilSpring(recoilState, dt, cfg) {
   return recoilState;
 }
 
+/**
+ * Pesos iniciales de mezcla de poses del avatar (todos en reposo).
+ * @returns {Record<string, number>}
+ */
 export function createPoseWeights() {
   return { idle: 1, walk: 0, sprint: 0, crouch: 0, slide: 0, air: 0 };
 }
@@ -236,6 +258,13 @@ export function stepPoseWeights(weights, info, dt, cfg = ANIMATION_FEEL_CONFIG) 
   return weights;
 }
 
+/**
+ * Ruido de valor 2D suavizado en [0, 1).
+ * @param {number} x
+ * @param {number} z
+ * @param {number} seed
+ * @returns {number}
+ */
 export function valueNoise2D(x, z, seed) {
   const ix = Math.floor(x);
   const iz = Math.floor(z);
@@ -252,6 +281,14 @@ export function valueNoise2D(x, z, seed) {
   return vx0 + (vx1 - vx0) * fz;
 }
 
+/**
+ * Movimiento browniano fraccional (suma de octavas de valueNoise2D) normalizado a [0, 1).
+ * @param {number} x
+ * @param {number} z
+ * @param {number} seed
+ * @param {number} [octaves]
+ * @returns {number}
+ */
 export function fbm2D(x, z, seed, octaves = 4) {
   let value = 0;
   let amp = 0.52;
@@ -266,22 +303,47 @@ export function fbm2D(x, z, seed, octaves = 4) {
   return value / norm;
 }
 
+/**
+ * Índice de celda X de la rejilla -> coordenada de mundo (m).
+ * @param {number} gx
+ * @returns {number}
+ */
 export function gridToWorldX(gx) {
   return (gx - GRID_SIZE / 2) * CELL_SIZE;
 }
 
+/**
+ * Índice de celda Z de la rejilla -> coordenada de mundo (m).
+ * @param {number} gz
+ * @returns {number}
+ */
 export function gridToWorldZ(gz) {
   return (gz - GRID_SIZE / 2) * CELL_SIZE;
 }
 
+/**
+ * Coordenada de mundo X (m) -> índice de celda de la rejilla.
+ * @param {number} wx
+ * @returns {number}
+ */
 export function worldToGridX(wx) {
   return Math.max(0, Math.min(GRID_SIZE - 1, Math.floor((wx + WORLD_HALF) / CELL_SIZE)));
 }
 
+/**
+ * Coordenada de mundo Z (m) -> índice de celda de la rejilla.
+ * @param {number} wz
+ * @returns {number}
+ */
 export function worldToGridZ(wz) {
   return Math.max(0, Math.min(GRID_SIZE - 1, Math.floor((wz + WORLD_HALF) / CELL_SIZE)));
 }
 
+/**
+ * X del centro del cauce del río Quindío a la altura z (meandros suaves).
+ * @param {number} wz
+ * @returns {number}
+ */
 export function getRiverCenterWorldX(wz) {
   return -48 + Math.sin(wz * 0.012) * 38 + Math.cos(wz * 0.006) * 18 + wz * 0.07;
 }
@@ -351,6 +413,16 @@ export function getWaterProfileAt(wx, wz) {
   };
 }
 
+/**
+ * Distancia en el plano XZ del punto P al segmento AB.
+ * @param {number} px
+ * @param {number} pz
+ * @param {number} ax
+ * @param {number} az
+ * @param {number} bx
+ * @param {number} bz
+ * @returns {number}
+ */
 export function distToSegment(px, pz, ax, az, bx, bz) {
   const vx = bx - ax;
   const vz = bz - az;

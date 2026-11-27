@@ -1,5 +1,6 @@
 // shared/physics/vault.js
 // Detección de obstáculos saltables (parkour W+Espacio): cercas, muros bajos, cajas y troncos etiquetados.
+// @ts-check
 
 import { WORLD_HALF, PLAYER_RADIUS, PLAYER_CROUCH_HEIGHT } from '../config.js';
 import { resolveSlidingHorizontal } from './collision.js';
@@ -21,6 +22,15 @@ const VAULTABLE_TAGS = new Set([
   'heli_low'
 ]);
 
+/**
+ * Busca un obstáculo saltable justo delante (W+Espacio) y devuelve el punto de aterrizaje seguro.
+ * @param {import('../mapGen.js').CocoraMap} map
+ * @param {number} x
+ * @param {number} y pies del jugador
+ * @param {number} z
+ * @param {number} yaw dirección de la vista
+ * @returns {object|null} datos del salto (inicio, ápice, aterrizaje) o null si no hay obstáculo válido
+ */
 export function findVaultableObstacle(map, x, y, z, yaw) {
   if (!map || !map.colliders) return null;
   const fx = Math.sin(yaw);

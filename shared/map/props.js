@@ -1,5 +1,6 @@
 // shared/map/props.js
 // Props del mapa: vegetación orgánica sin cuadrículas, cobertura táctica con colisión deslizante y spawns de fauna.
+// @ts-check
 
 import {
   fbm2D,

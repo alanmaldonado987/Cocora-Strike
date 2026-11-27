@@ -511,3 +511,9 @@ export const SPATIAL_GRID_CONFIG = {
   maxStamp: 0x7fffffff        // Tope entero Smi de 31 bits antes de reiniciar queryStamp en colisionadores
 };
 
+export const CLIENT_PERF_CONFIG = {
+  hudSensorHz: 10,            // Frecuencia máxima (10 Hz) para findBestInteractable e isConcealedInBush
+  hudSensorIntervalSec: 0.10, // Intervalo mínimo entre escaneos contextuales del HUD (1 / 10 Hz)
+  damageFlashDurationMs: 190  // Duración en ms del destello de daño antes de atenuarse
+};
+

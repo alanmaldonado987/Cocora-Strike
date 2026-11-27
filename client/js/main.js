@@ -16,12 +16,28 @@ import {
   PLAYER_EYE_HEIGHT,
   PLAYER_CROUCH_EYE_HEIGHT,
   PLAYER_SLIDE_EYE_HEIGHT,
-  SWIM_CONFIG
+  SWIM_CONFIG,
+  CLIENT_PERF_CONFIG
 } from '/shared/mapData.js';
 import { SoundEngine } from './audio.js';
 import { VoxelWorld } from './world.js';
 import { AVATAR_COLORS, LocalPlayerController, requestRawPointerLock } from './player.js';
 import { NetworkManager } from './network.js';
+import {
+  createHudCache,
+  resetHudCache,
+  setTextIfChanged,
+  setStyleIfChanged,
+  toggleClassIfChanged,
+  setAttrIfChanged,
+  setDatasetIfChanged,
+  updateWeaponSlotIfChanged,
+  createHudSensorState,
+  invalidateHudSensors,
+  stepHudSensorThrottle,
+  createDamageFlashState,
+  triggerDamageFlash
+} from './hudUpdater.js';
 import { preloadExternalModelAssets } from '/Modelos%203D/cocoraModels.js';
 
 const WEAPON_SVG_PATHS = {
@@ -222,11 +238,13 @@ const ui = {
 let planeState = null;
 let stormState = null;
 let myNickname = '';
-let lastRenderedWeaponIcon = '';
 let currentInteractable = null;
 let hitmarkerTimeout = null;
 let toastTimeout = null;
 let targetHudTimeout = null;
+const hudCache = createHudCache();
+const hudSensorState = createHudSensorState(CLIENT_PERF_CONFIG.hudSensorIntervalSec);
+const damageFlashState = createDamageFlashState();
 const projVec = new THREE.Vector3();
 const hudLookDir = new THREE.Vector3();
 
@@ -466,11 +484,12 @@ function addKillfeedItem(killer, victim, reason) {
 }
 
 function flashDamage(colorRgba = 'rgba(239, 68, 68, 0.65)') {
-  ui.damageFlash.style.background = `radial-gradient(circle, transparent 48%, ${colorRgba} 100%)`;
-  ui.damageFlash.style.opacity = '1';
-  setTimeout(() => {
-    ui.damageFlash.style.opacity = '0';
-  }, 190);
+  triggerDamageFlash(
+    damageFlashState,
+    ui.damageFlash,
+    colorRgba,
+    CLIENT_PERF_CONFIG.damageFlashDurationMs
+  );
 }
 
 function showHitmarker(isHeadshot = false) {
@@ -480,60 +499,79 @@ function showHitmarker(isHeadshot = false) {
   hitmarkerTimeout = setTimeout(() => ui.hitmarker.classList.add('hidden'), 150);
 }
 
+const HP_GRAD_HIGH = 'linear-gradient(90deg, #16a34a, #22c55e, #4ade80)';
+const HP_GRAD_MID = 'linear-gradient(90deg, #d97706, #f59e0b)';
+const HP_GRAD_LOW = 'linear-gradient(90deg, #b91c1c, #ef4444)';
+
 function updateSlotClass(el, weaponKey) {
   if (!el) return;
-  const unlocked = localPlayer.weapons[weaponKey]?.unlocked;
+  const unlocked = Boolean(localPlayer.weapons[weaponKey]?.unlocked);
   const active = localPlayer.equipped === weaponKey;
-  el.className = `w-slot${!unlocked ? ' locked' : ''}${active ? ' active' : ''}`;
+  updateWeaponSlotIfChanged(hudCache, `slot_${weaponKey}`, el, unlocked, active);
 }
 
-function updateHUD() {
+function updateHUD(dt = 0.016) {
   if (!localPlayer.active) return;
 
-  const hpPct = Math.max(0, Math.min(100, localPlayer.hp));
-  ui.hpFill.style.width = `${hpPct}%`;
-  ui.hpFill.style.background =
-    hpPct > 45
-      ? 'linear-gradient(90deg, #16a34a, #22c55e, #4ade80)'
-      : hpPct > 22
-      ? 'linear-gradient(90deg, #d97706, #f59e0b)'
-      : 'linear-gradient(90deg, #b91c1c, #ef4444)';
-  ui.hpText.textContent = `${Math.ceil(localPlayer.hp)}/100`;
+  const hpPct = Math.round(Math.max(0, Math.min(100, localPlayer.hp)) * 10) / 10;
+  if (hudCache.hpPct !== hpPct) {
+    hudCache.hpPct = hpPct;
+    ui.hpFill.style.width = `${hpPct}%`;
+  }
+  const hpGrad = hpPct > 45 ? HP_GRAD_HIGH : hpPct > 22 ? HP_GRAD_MID : HP_GRAD_LOW;
+  setStyleIfChanged(hudCache, 'hpBg', ui.hpFill, 'background', hpGrad);
+
+  const hpCeil = Math.ceil(localPlayer.hp);
+  if (hudCache.hpCeil !== hpCeil) {
+    hudCache.hpCeil = hpCeil;
+    setTextIfChanged(hudCache, 'hpText', ui.hpText, `${hpCeil}/100`);
+  }
 
   // Aliento: visible nadando o mientras se recupera; aviso al ahogarse
   const breath = Math.max(0, Math.min(SWIM_CONFIG.maxBreath, localPlayer.breath ?? SWIM_CONFIG.maxBreath));
-  const showBreath = localPlayer.alive && (localPlayer.isSwimming || breath < SWIM_CONFIG.maxBreath);
-  ui.breathBar?.classList.toggle('hidden', !showBreath);
+  const showBreath = Boolean(localPlayer.alive && (localPlayer.isSwimming || breath < SWIM_CONFIG.maxBreath));
+  toggleClassIfChanged(hudCache, 'breathHidden', ui.breathBar, 'hidden', !showBreath);
   if (showBreath && ui.breathFill) {
-    ui.breathFill.style.width = `${(breath / SWIM_CONFIG.maxBreath) * 100}%`;
-    ui.breathFill.classList.toggle('low', breath < 30);
+    const breathPct = Math.round(((breath / SWIM_CONFIG.maxBreath) * 100) * 2) / 2;
+    if (hudCache.breathPct !== breathPct) {
+      hudCache.breathPct = breathPct;
+      ui.breathFill.style.width = `${breathPct}%`;
+    }
+    toggleClassIfChanged(hudCache, 'breathLow', ui.breathFill, 'low', breath < 30);
   }
-  const drowning = localPlayer.alive && localPlayer.isSwimming && breath <= 0;
-  ui.drownWarning?.classList.toggle('hidden', !drowning);
-  ui.medkitCount.textContent = String(localPlayer.medkits);
-  if (ui.bandageCount) ui.bandageCount.textContent = String(localPlayer.bandages);
-  ui.killsCount.textContent = String(localPlayer.kills);
+  const drowning = Boolean(localPlayer.alive && localPlayer.isSwimming && breath <= 0);
+  toggleClassIfChanged(hudCache, 'drownHidden', ui.drownWarning, 'hidden', !drowning);
 
-  // Indicador de ocultamiento sigiloso en arbustos altos
-  if (ui.stealthBadge && currentMap) {
-    const concealed =
-      localPlayer.alive &&
-      localPlayer.state === 'ground' &&
-      (localPlayer.isCrouching || localPlayer.isSliding) &&
-      currentMap.isConcealedInBush(localPlayer.x, localPlayer.z);
-    ui.stealthBadge.classList.toggle('hidden', !concealed);
+  if (hudCache.medkits !== localPlayer.medkits) {
+    hudCache.medkits = localPlayer.medkits;
+    setTextIfChanged(hudCache, 'medkitText', ui.medkitCount, String(localPlayer.medkits));
+  }
+  if (ui.bandageCount && hudCache.bandages !== localPlayer.bandages) {
+    hudCache.bandages = localPlayer.bandages;
+    setTextIfChanged(hudCache, 'bandageText', ui.bandageCount, String(localPlayer.bandages));
+  }
+  if (hudCache.kills !== localPlayer.kills) {
+    hudCache.kills = localPlayer.kills;
+    setTextIfChanged(hudCache, 'killsText', ui.killsCount, String(localPlayer.kills));
   }
 
-  // Aviso contextual [E] RECOGER... o [E] ABRIR PUERTA sobre la barra de salud
-  if (ui.interactPrompt) {
-    if (localPlayer.alive && localPlayer.state === 'ground') {
+  // Consultas contextuales pesadas (isConcealedInBush + findBestInteractable) limitadas a máximo 10 Hz
+  const canSenseGround = Boolean(localPlayer.alive && localPlayer.state === 'ground');
+  if (stepHudSensorThrottle(hudSensorState, dt, canSenseGround)) {
+    hudSensorState.concealed = Boolean(
+      currentMap &&
+        (localPlayer.isCrouching || localPlayer.isSliding) &&
+        currentMap.isConcealedInBush(localPlayer.x, localPlayer.z)
+    );
+
+    if (ui.interactPrompt) {
       camera.getWorldDirection(hudLookDir);
       const eyeH = localPlayer.isSliding
         ? PLAYER_SLIDE_EYE_HEIGHT
         : localPlayer.isCrouching
         ? PLAYER_CROUCH_EYE_HEIGHT
         : PLAYER_EYE_HEIGHT;
-      currentInteractable = world.findBestInteractable(
+      const found = world.findBestInteractable(
         localPlayer.x,
         localPlayer.y,
         localPlayer.z,
@@ -542,41 +580,59 @@ function updateHUD() {
         hudLookDir.y,
         hudLookDir.z
       );
-      if (currentInteractable) {
-        ui.interactPrompt.textContent = currentInteractable.promptText;
-        ui.interactPrompt.classList.remove('hidden');
-      } else {
-        ui.interactPrompt.classList.add('hidden');
-      }
-    } else {
-      currentInteractable = null;
-      ui.interactPrompt.classList.add('hidden');
+      hudSensorState.interactable = found;
     }
+  } else if (canSenseGround && !(localPlayer.isCrouching || localPlayer.isSliding)) {
+    // Salir de sigilo visualmente al instante si deja de agacharse/deslizarse sin esperar 100 ms
+    hudSensorState.concealed = false;
+  }
+
+  currentInteractable = hudSensorState.interactable;
+
+  if (ui.stealthBadge) {
+    toggleClassIfChanged(hudCache, 'stealthHidden', ui.stealthBadge, 'hidden', !hudSensorState.concealed);
+  }
+
+  if (ui.interactPrompt) {
+    const showInteract = Boolean(canSenseGround && currentInteractable);
+    if (showInteract) {
+      setTextIfChanged(hudCache, 'interactText', ui.interactPrompt, currentInteractable.promptText);
+    }
+    toggleClassIfChanged(hudCache, 'interactHidden', ui.interactPrompt, 'hidden', !showInteract);
   }
 
   const wKey = localPlayer.equipped || 'fists';
   const wSpec = WEAPONS[wKey] || WEAPONS.fists;
   const wState = localPlayer.weapons[wKey];
-  ui.weaponName.textContent = wSpec.name.toUpperCase();
-
-  if (lastRenderedWeaponIcon !== wKey && ui.weaponIconPath) {
-    lastRenderedWeaponIcon = wKey;
-    ui.weaponIconPath.setAttribute('d', WEAPON_SVG_PATHS[wKey] || WEAPON_SVG_PATHS.fists);
+  if (hudCache.weaponKey !== wKey) {
+    hudCache.weaponKey = wKey;
+    setTextIfChanged(hudCache, 'weaponName', ui.weaponName, wSpec.name.toUpperCase());
+    setAttrIfChanged(hudCache, 'weaponIconD', ui.weaponIconPath, 'd', WEAPON_SVG_PATHS[wKey] || WEAPON_SVG_PATHS.fists);
   }
 
   if (wSpec.magSize === 0) {
-    ui.ammoCurrent.textContent = '∞';
-    ui.ammoReserve.textContent = '';
-    if (ui.weaponChargeFill) ui.weaponChargeFill.style.width = '100%';
+    setTextIfChanged(hudCache, 'ammoCur', ui.ammoCurrent, '∞');
+    setTextIfChanged(hudCache, 'ammoRes', ui.ammoReserve, '');
+    setStyleIfChanged(hudCache, 'wChargeW', ui.weaponChargeFill, 'width', '100%');
   } else {
     const curMag = wState ? wState.mag : 0;
-    ui.ammoCurrent.textContent = String(curMag);
-    ui.ammoReserve.textContent = `/${localPlayer.reserveAmmo}`;
+    if (hudCache.ammoCurNum !== curMag) {
+      hudCache.ammoCurNum = curMag;
+      setTextIfChanged(hudCache, 'ammoCur', ui.ammoCurrent, String(curMag));
+    }
+    if (hudCache.ammoResNum !== localPlayer.reserveAmmo) {
+      hudCache.ammoResNum = localPlayer.reserveAmmo;
+      setTextIfChanged(hudCache, 'ammoRes', ui.ammoReserve, `/${localPlayer.reserveAmmo}`);
+    }
     if (ui.weaponChargeFill) {
-      const magPct = localPlayer.reloading
+      const rawMagPct = localPlayer.reloading
         ? Math.min(100, ((performance.now() - localPlayer.reloadStart) / Math.max(1, localPlayer.reloadDuration)) * 100)
         : Math.max(0, Math.min(100, (curMag / wSpec.magSize) * 100));
-      ui.weaponChargeFill.style.width = `${magPct}%`;
+      const magPct = Math.round(rawMagPct * 2) / 2;
+      if (hudCache.magPct !== magPct) {
+        hudCache.magPct = magPct;
+        setStyleIfChanged(hudCache, 'wChargeW', ui.weaponChargeFill, 'width', `${magPct}%`);
+      }
     }
   }
 
@@ -589,99 +645,168 @@ function updateHUD() {
   updateSlotClass(ui.slotRifle, 'rifle');
   updateSlotClass(ui.slotSniper, 'sniper');
 
-  if (localPlayer.reloading) {
-    ui.reloadWrap.classList.remove('hidden');
-    const prog = Math.min(
-      100,
-      ((performance.now() - localPlayer.reloadStart) / Math.max(1, localPlayer.reloadDuration)) * 100
+  const isReloading = Boolean(localPlayer.reloading);
+  toggleClassIfChanged(hudCache, 'reloadHidden', ui.reloadWrap, 'hidden', !isReloading);
+  if (isReloading) {
+    const prog = Math.round(
+      Math.min(100, ((performance.now() - localPlayer.reloadStart) / Math.max(1, localPlayer.reloadDuration)) * 100)
     );
-    ui.reloadFill.style.width = `${prog}%`;
-  } else {
-    ui.reloadWrap.classList.add('hidden');
-  }
-
-  if (ui.healWrap) {
-    if (localPlayer.isHealing && localPlayer.alive) {
-      ui.healWrap.classList.remove('hidden');
-      const elapsedHeal = performance.now() - localPlayer.healStart;
-      const dur = Math.max(1, localPlayer.healDuration);
-      const pctHeal = Math.min(100, (elapsedHeal / dur) * 100);
-      const remSec = Math.max(0, (dur - elapsedHeal) / 1000).toFixed(1);
-      ui.healLabel.textContent =
-        localPlayer.healItemType === 'bandage' ? '🧻 APLICANDO VENDA...' : '🩹 APLICANDO BOTIQUÍN...';
-      ui.healTimer.textContent = `${remSec}s`;
-      ui.healFill.style.width = `${pctHeal}%`;
-    } else {
-      ui.healWrap.classList.add('hidden');
+    if (hudCache.reloadProg !== prog) {
+      hudCache.reloadProg = prog;
+      setStyleIfChanged(hudCache, 'reloadW', ui.reloadFill, 'width', `${prog}%`);
     }
   }
 
-  const sniperScoped = localPlayer.isSniperScoped();
-  if (ui.sniperScopeOverlay) {
-    ui.sniperScopeOverlay.classList.toggle('hidden', !sniperScoped);
+  if (ui.healWrap) {
+    const showHeal = Boolean(localPlayer.isHealing && localPlayer.alive);
+    toggleClassIfChanged(hudCache, 'healHidden', ui.healWrap, 'hidden', !showHeal);
+    if (showHeal) {
+      const elapsedHeal = performance.now() - localPlayer.healStart;
+      const dur = Math.max(1, localPlayer.healDuration);
+      const pctHeal = Math.round(Math.min(100, (elapsedHeal / dur) * 100));
+      const remTenths = Math.max(0, Math.round(((dur - elapsedHeal) / 1000) * 10));
+      const healLabel =
+        localPlayer.healItemType === 'bandage' ? '🧻 APLICANDO VENDA...' : '🩹 APLICANDO BOTIQUÍN...';
+      setTextIfChanged(hudCache, 'healLabel', ui.healLabel, healLabel);
+      if (hudCache.healRemTenths !== remTenths) {
+        hudCache.healRemTenths = remTenths;
+        setTextIfChanged(hudCache, 'healTimer', ui.healTimer, `${(remTenths / 10).toFixed(1)}s`);
+      }
+      if (hudCache.healPct !== pctHeal) {
+        hudCache.healPct = pctHeal;
+        setStyleIfChanged(hudCache, 'healW', ui.healFill, 'width', `${pctHeal}%`);
+      }
+    }
   }
 
+  const sniperScoped = Boolean(localPlayer.isSniperScoped());
+  toggleClassIfChanged(hudCache, 'scopeHidden', ui.sniperScopeOverlay, 'hidden', !sniperScoped);
+
   if (ui.crosshair) {
-    ui.crosshair.dataset.weapon = wKey;
-    ui.crosshair.dataset.ads = String(Boolean(localPlayer.aimingZoom && localPlayer.state === 'ground'));
-    ui.crosshair.style.opacity = sniperScoped ? '0' : '1';
+    setDatasetIfChanged(hudCache, 'chWeapon', ui.crosshair, 'weapon', wKey);
+    const adsStr = localPlayer.aimingZoom && localPlayer.state === 'ground' ? 'true' : 'false';
+    setDatasetIfChanged(hudCache, 'chAds', ui.crosshair, 'ads', adsStr);
+    setStyleIfChanged(hudCache, 'chOpacity', ui.crosshair, 'opacity', sniperScoped ? '0' : '1');
   }
 
   if (!localPlayer.alive) {
-    ui.actionBanner.textContent = '💀 ELIMINADO — Observando el desenlace en el Valle del Cocora...';
-    ui.actionBanner.classList.remove('hidden');
+    setTextIfChanged(
+      hudCache,
+      'actionBannerText',
+      ui.actionBanner,
+      '💀 ELIMINADO — Observando el desenlace en el Valle del Cocora...'
+    );
+    toggleClassIfChanged(hudCache, 'actionBannerHidden', ui.actionBanner, 'hidden', false);
   } else if (localPlayer.state === 'plane') {
     const alt = Math.round(localPlayer.currentGroundClearance);
-    const airLabel = (planeState?.label || 'AC-130J Ghostrider').toUpperCase();
-    ui.actionBanner.textContent = localPlayer.isCabinDisembarking
-      ? `✈️ ${airLabel} · AVANZANDO POR LA BODEGA HACIA LA RAMPA...`
-      : `✈️ ${airLabel} (${alt}m) · [V] Vista Cabina/Exterior — Pulsa [ESPACIO] o [F] para desembarcar`;
-    ui.actionBanner.classList.remove('hidden');
+    const rawLabel = planeState?.label || 'AC-130J Ghostrider';
+    const disembark = Boolean(localPlayer.isCabinDisembarking);
+    if (
+      hudCache.bannerMode !== 'plane' ||
+      hudCache.bannerAlt !== alt ||
+      hudCache.bannerPlaneLabel !== rawLabel ||
+      hudCache.bannerDisembark !== disembark
+    ) {
+      hudCache.bannerMode = 'plane';
+      hudCache.bannerAlt = alt;
+      hudCache.bannerPlaneLabel = rawLabel;
+      hudCache.bannerDisembark = disembark;
+      const airLabel = rawLabel.toUpperCase();
+      const text = disembark
+        ? `✈️ ${airLabel} · AVANZANDO POR LA BODEGA HACIA LA RAMPA...`
+        : `✈️ ${airLabel} (${alt}m) · [V] Vista Cabina/Exterior — Pulsa [ESPACIO] o [F] para desembarcar`;
+      setTextIfChanged(hudCache, 'actionBannerText', ui.actionBanner, text);
+    }
+    toggleClassIfChanged(hudCache, 'actionBannerHidden', ui.actionBanner, 'hidden', false);
   } else if (localPlayer.state === 'skydiving') {
     const alt = Math.round(localPlayer.currentGroundClearance);
-    const spd = localPlayer.currentDescentSpeed.toFixed(1);
-    ui.actionBanner.textContent = `🦅 CAÍDA LIBRE · Alt: ${alt}m (Auto: ${PARACHUTE_CONFIG.autoDeployHeight}m) · ${spd} m/s — [ESPACIO]/[F] Paracaídas`;
-    ui.actionBanner.classList.remove('hidden');
+    const spdTenths = Math.round(localPlayer.currentDescentSpeed * 10);
+    if (hudCache.bannerMode !== 'skydiving' || hudCache.bannerAlt !== alt || hudCache.bannerSpd !== spdTenths) {
+      hudCache.bannerMode = 'skydiving';
+      hudCache.bannerAlt = alt;
+      hudCache.bannerSpd = spdTenths;
+      const spd = (spdTenths / 10).toFixed(1);
+      setTextIfChanged(
+        hudCache,
+        'actionBannerText',
+        ui.actionBanner,
+        `🦅 CAÍDA LIBRE · Alt: ${alt}m (Auto: ${PARACHUTE_CONFIG.autoDeployHeight}m) · ${spd} m/s — [ESPACIO]/[F] Paracaídas`
+      );
+    }
+    toggleClassIfChanged(hudCache, 'actionBannerHidden', ui.actionBanner, 'hidden', false);
   } else if (localPlayer.state === 'parachuting') {
     const alt = Math.round(localPlayer.currentGroundClearance);
-    const spd = localPlayer.currentDescentSpeed.toFixed(1);
-    ui.actionBanner.textContent = `🪂 PARACAÍDAS ABIERTO · Alt: ${alt}m · Vel: ${spd} m/s — Planea con WASD`;
-    ui.actionBanner.classList.remove('hidden');
+    const spdTenths = Math.round(localPlayer.currentDescentSpeed * 10);
+    if (hudCache.bannerMode !== 'parachuting' || hudCache.bannerAlt !== alt || hudCache.bannerSpd !== spdTenths) {
+      hudCache.bannerMode = 'parachuting';
+      hudCache.bannerAlt = alt;
+      hudCache.bannerSpd = spdTenths;
+      const spd = (spdTenths / 10).toFixed(1);
+      setTextIfChanged(
+        hudCache,
+        'actionBannerText',
+        ui.actionBanner,
+        `🪂 PARACAÍDAS ABIERTO · Alt: ${alt}m · Vel: ${spd} m/s — Planea con WASD`
+      );
+    }
+    toggleClassIfChanged(hudCache, 'actionBannerHidden', ui.actionBanner, 'hidden', false);
   } else {
-    ui.actionBanner.classList.add('hidden');
+    hudCache.bannerMode = 'ground';
+    toggleClassIfChanged(hudCache, 'actionBannerHidden', ui.actionBanner, 'hidden', true);
   }
 
-  if (localPlayer.alive && !localPlayer.pointerLocked && ui.gameoverScreen.classList.contains('hidden')) {
-    ui.pointerPrompt.classList.remove('hidden');
-  } else {
-    ui.pointerPrompt.classList.add('hidden');
-  }
+  const showPointerPrompt = Boolean(
+    localPlayer.alive && !localPlayer.pointerLocked && ui.gameoverScreen.classList.contains('hidden')
+  );
+  toggleClassIfChanged(hudCache, 'pointerHidden', ui.pointerPrompt, 'hidden', !showPointerPrompt);
 
   if (stormState) {
     const dpsVal = stormState.dps || 1;
-    const label =
-      stormState.state === 'shrinking'
-        ? `⚡ Cerrando F${stormState.phaseIndex}`
-        : stormState.state === 'closed'
-        ? `⚡ Zona Cerrada`
-        : `Zona · Fase ${stormState.phaseIndex}`;
-    ui.stormPhaseText.textContent = label;
+    const phaseIdx = stormState.phaseIndex;
+    const stMode = stormState.state;
+    if (hudCache.stormState !== stMode || hudCache.stormPhase !== phaseIdx) {
+      hudCache.stormState = stMode;
+      hudCache.stormPhase = phaseIdx;
+      const label =
+        stMode === 'shrinking'
+          ? `⚡ Cerrando F${phaseIdx}`
+          : stMode === 'closed'
+          ? `⚡ Zona Cerrada`
+          : `Zona · Fase ${phaseIdx}`;
+      setTextIfChanged(hudCache, 'stormPhaseText', ui.stormPhaseText, label);
+    }
+
     const secs = Math.max(0, stormState.timer || 0);
-    const mm = String(Math.floor(secs / 60)).padStart(2, '0');
-    const ss = String(secs % 60).padStart(2, '0');
-    ui.stormTimerText.textContent = `${mm}:${ss}`;
+    if (hudCache.stormSecs !== secs) {
+      hudCache.stormSecs = secs;
+      const mm = String(Math.floor(secs / 60)).padStart(2, '0');
+      const ss = String(secs % 60).padStart(2, '0');
+      setTextIfChanged(hudCache, 'stormTimerText', ui.stormTimerText, `${mm}:${ss}`);
+    }
 
     const distCenter = Math.hypot(
       localPlayer.x - stormState.centerX,
       localPlayer.z - stormState.centerZ
     );
-    const outside =
-      localPlayer.alive && localPlayer.state !== 'plane' && distCenter > stormState.radius;
-    if (outside) {
-      ui.stormWarning.textContent = `⚡ ¡FUERA DE LA ZONA SEGURA! (-${dpsVal} HP/s) · DIRÍGETE AL CÍRCULO BLANCO ⚡`;
+    const outside = Boolean(
+      localPlayer.alive && localPlayer.state !== 'plane' && distCenter > stormState.radius
+    );
+    if (outside && hudCache.stormWarnDps !== dpsVal) {
+      hudCache.stormWarnDps = dpsVal;
+      setTextIfChanged(
+        hudCache,
+        'stormWarningText',
+        ui.stormWarning,
+        `⚡ ¡FUERA DE LA ZONA SEGURA! (-${dpsVal} HP/s) · DIRÍGETE AL CÍRCULO BLANCO ⚡`
+      );
     }
-    ui.stormWarning.classList.toggle('hidden', !outside);
-    ui.stormVignette.style.opacity = String(Math.min(1, (world.stormAtmosphereFactor || 0) * 1.05));
+    toggleClassIfChanged(hudCache, 'stormWarningHidden', ui.stormWarning, 'hidden', !outside);
+
+    const vigAlpha = Math.round(Math.min(1, (world.stormAtmosphereFactor || 0) * 1.05) * 100) / 100;
+    if (hudCache.stormVig !== vigAlpha) {
+      hudCache.stormVig = vigAlpha;
+      setStyleIfChanged(hudCache, 'stormVigOpacity', ui.stormVignette, 'opacity', String(vigAlpha));
+    }
   }
 }
 
@@ -796,6 +921,8 @@ const net = new NetworkManager(scene, {
       localPlayer.pitch = -0.08;
     }
 
+    resetHudCache(hudCache);
+    invalidateHudSensors(hudSensorState);
     ui.lobbyScreen.classList.add('hidden');
     ui.gameoverScreen.classList.add('hidden');
     ui.sniperScopeOverlay?.classList.add('hidden');
@@ -881,6 +1008,7 @@ const net = new NetworkManager(scene, {
 
   onDoorStateChanged(data) {
     world.applyDoorState(data, true);
+    invalidateHudSensors(hudSensorState);
     const dist = Math.hypot((data.x || 0) - localPlayer.x, (data.z || 0) - localPlayer.z);
     if (data.destroyed) {
       audio.playDoorBreak(dist);
@@ -897,6 +1025,7 @@ const net = new NetworkManager(scene, {
 
   onLootPicked(data) {
     world.removeLootItem(data.lootId);
+    invalidateHudSensors(hudSensorState);
     if (data.playerId === net.selfId) {
       audio.playPickup();
       localPlayer.hp = data.hp;
@@ -1032,6 +1161,7 @@ const net = new NetworkManager(scene, {
 
   onGameOver(data) {
     document.exitPointerLock?.();
+    resetHudCache(hudCache);
     ui.stormWarning.classList.add('hidden');
     ui.sniperScopeOverlay?.classList.add('hidden');
     ui.stormVignette.style.opacity = '0';
@@ -1067,6 +1197,7 @@ const net = new NetworkManager(scene, {
     localPlayer.isVaulting = false;
     localPlayer.isCrouching = false;
     localPlayer.state = 'lobby';
+    resetHudCache(hudCache);
     ui.sniperScopeOverlay?.classList.add('hidden');
     ui.hudScreen.classList.add('hidden');
     ui.gameoverScreen.classList.add('hidden');
@@ -1193,7 +1324,7 @@ function renderFrame() {
   localPlayer.update(dt, currentMap, planeState, world, net.getRemoteEntityList());
   net.sendPlayerState(localPlayer);
   net.updateInterpolation(dt, world, planeState, currentMap);
-  updateHUD();
+  updateHUD(dt);
 
   minimapAccum += dt;
   if (minimapAccum >= 0.05 && localPlayer.active) {

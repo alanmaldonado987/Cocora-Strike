@@ -42,7 +42,7 @@ Regla: **extraer y organizar código sin cambiar comportamiento**. Un dominio po
 - [x] `physics/` — collision.js, raycast.js, playerController.js, vault.js
 - [x] `map/` — terrain.js, buildings.js, props.js, pois.data.js (generateCocoraMap encadena buildTerrain → buildStructures → createGroundQueries → buildProps en el orden original del RNG)
 - [x] Constantes congeladas (`Object.freeze`) para estados (`'ground'`, `'skydiving'`, `moveMode`, …) en `shared/config.js` (cámara del cliente y `bannerMode` del HUD quedan como strings locales de la vista, no son estado de juego)
-- [ ] Fábrica/registro único de armas en `/shared`
+- [x] Fábrica/registro único de armas en `/shared`
 - [ ] `// @ts-check` + JSDoc en todo `/shared`
 
 ### 3. E2E
@@ -69,3 +69,4 @@ Regla: **extraer y organizar código sin cambiar comportamiento**. Un dominio po
 | physics | `shared/physics.js` → `shared/physics/{collision,raycast,vault}.js`; `playerController.js` y `mapGen.js` importan de los nuevos módulos; barril `mapData.js` actualizado (+ protocol) | 86 pruebas; humo OK |
 | map | `shared/mapGen.js` (orquestador) → `shared/map/{terrain,buildings,props,pois.data}.js`; `test/mapFingerprint.test.js` + `test/fixtures/mapFingerprint.golden.json` (huella del mapa previo a la Fase 5, 3 semillas) | 89 pruebas; mapa bit a bit idéntico |
 | estados | `shared/config.js` (+ PLAYER_STATE, MOVE_MODE, GAME_PHASE, STORM_STATE, WILDLIFE_STATE); ~260 sustituciones vía AST en client/server/shared; `test/stateEnums.test.js` | 91 pruebas; humo OK |
+| armas | `shared/weapons.js` (WEAPON_IDS, WEAPON_REGISTRY, createWeaponInventory, serialize/applyUnlockedWeapons); reemplaza los 3 inventarios a mano de `server/gameRoom.js`, `client/js/main.js` y `client/js/player/controller.js`; `test/weaponRegistry.test.js` | 94 pruebas; humo OK |

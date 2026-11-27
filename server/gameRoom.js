@@ -22,6 +22,7 @@ import {
   MOVE_MODE,
   PLAYER_STATE
 } from '../shared/mapData.js';
+import { createWeaponInventory, serializeUnlockedWeapons } from '../shared/weapons.js';
 import { TICK_RATE, TICK_DT } from './room/constants.js';
 import { lobbyMethods } from './room/lobby.js';
 import { interactablesMethods } from './room/interactables.js';
@@ -69,16 +70,7 @@ export class GameRoom {
   }
 
   createFreshWeaponsMap() {
-    return {
-      fists: { unlocked: true, mag: 0 },
-      pistol: { unlocked: false, mag: 0 },
-      revolver: { unlocked: false, mag: 0 },
-      shotgun: { unlocked: false, mag: 0 },
-      smg: { unlocked: false, mag: 0 },
-      assault_rifle: { unlocked: false, mag: 0 },
-      rifle: { unlocked: false, mag: 0 },
-      sniper: { unlocked: false, mag: 0 }
-    };
+    return createWeaponInventory();
   }
 
   createFreshParticipant(id, name, isBot = false) {
@@ -361,15 +353,7 @@ export class GameRoom {
         isHealing: p.healingUntil > Date.now(),
         healingItem: p.healingUntil > Date.now() ? p.healingItem : null,
         reloading: p.reloadingUntil > Date.now(),
-        unlockedWeapons: {
-          pistol: p.weapons.pistol.unlocked,
-          revolver: p.weapons.revolver.unlocked,
-          shotgun: p.weapons.shotgun.unlocked,
-          smg: p.weapons.smg.unlocked,
-          assault_rifle: p.weapons.assault_rifle.unlocked,
-          rifle: p.weapons.rifle.unlocked,
-          sniper: p.weapons.sniper.unlocked
-        }
+        unlockedWeapons: serializeUnlockedWeapons(p.weapons)
       };
     }
     return out;

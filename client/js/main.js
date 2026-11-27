@@ -12,6 +12,7 @@ import {
   AUDIO_CONFIG,
   PLAYER_STATE
 } from '/shared/mapData.js';
+import { createWeaponInventory, applyUnlockedWeapons } from '/shared/weapons.js';
 import { SoundEngine } from './audio/audio.js';
 import { VoxelWorld } from './world/world.js';
 import { LocalPlayerController } from './player/controller.js';
@@ -129,16 +130,7 @@ const net = new NetworkManager(scene, {
     localPlayer.isSwimming = false;
     localPlayer.lastDrownHp = 100;
     localPlayer.kills = 0;
-    localPlayer.weapons = {
-      fists: { unlocked: true, mag: 0 },
-      pistol: { unlocked: false, mag: 0 },
-      revolver: { unlocked: false, mag: 0 },
-      shotgun: { unlocked: false, mag: 0 },
-      smg: { unlocked: false, mag: 0 },
-      assault_rifle: { unlocked: false, mag: 0 },
-      rifle: { unlocked: false, mag: 0 },
-      sniper: { unlocked: false, mag: 0 }
-    };
+    localPlayer.weapons = createWeaponInventory();
     localPlayer.reserveAmmo = me ? me.reserveAmmo : 24;
     localPlayer.medkits = me ? me.medkits : 0;
     localPlayer.bandages = me ? me.bandages : 1;
@@ -212,13 +204,7 @@ const net = new NetworkManager(scene, {
         localPlayer.breath = me.breath;
       }
       if (me.unlockedWeapons) {
-        localPlayer.weapons.pistol.unlocked = Boolean(me.unlockedWeapons.pistol);
-        localPlayer.weapons.revolver.unlocked = Boolean(me.unlockedWeapons.revolver);
-        localPlayer.weapons.shotgun.unlocked = Boolean(me.unlockedWeapons.shotgun);
-        localPlayer.weapons.smg.unlocked = Boolean(me.unlockedWeapons.smg);
-        localPlayer.weapons.assault_rifle.unlocked = Boolean(me.unlockedWeapons.assault_rifle);
-        localPlayer.weapons.rifle.unlocked = Boolean(me.unlockedWeapons.rifle);
-        localPlayer.weapons.sniper.unlocked = Boolean(me.unlockedWeapons.sniper);
+        applyUnlockedWeapons(localPlayer.weapons, me.unlockedWeapons);
       }
 
       if (localPlayer.state === PLAYER_STATE.PLANE && me.state !== PLAYER_STATE.PLANE) {

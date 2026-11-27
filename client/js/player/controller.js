@@ -22,6 +22,7 @@ import {
   MOVE_MODE,
   PLAYER_STATE
 } from '/shared/mapData.js';
+import { createWeaponInventory } from '/shared/weapons.js';
 import { inputMethods } from '../core/input.js';
 import { mixMethods } from '../core/mixin.js';
 import { predictionMethods } from '../net/prediction.js';
@@ -128,16 +129,7 @@ export class LocalPlayerController {
     this.hp = 100;
     this.kills = 0;
     this.equipped = 'fists';
-    this.weapons = {
-      fists: { unlocked: true, mag: 0 },
-      pistol: { unlocked: false, mag: 0 },
-      revolver: { unlocked: false, mag: 0 },
-      shotgun: { unlocked: false, mag: 0 },
-      smg: { unlocked: false, mag: 0 },
-      assault_rifle: { unlocked: false, mag: 0 },
-      rifle: { unlocked: false, mag: 0 },
-      sniper: { unlocked: false, mag: 0 }
-    };
+    this.weapons = createWeaponInventory();
     this.reserveAmmo = 24;
     this.medkits = 0;
     this.bandages = 1;

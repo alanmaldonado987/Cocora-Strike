@@ -5,6 +5,7 @@
 // - spatial.js  índices espaciales
 // - mapGen.js   generación procedural del Valle del Cocora
 // - protocol.js nombres de mensajes de red y cuantización
+// - weapons.js  registro maestro de armas (inventario inicial y serialización)
 // - physics/collision.js  agua/nado, colisión deslizante, separación y física simple
 // - physics/raycast.js    raycasts y línea de visión
 // - physics/vault.js      obstáculos saltables (parkour)
@@ -14,6 +15,7 @@ export * from './math.js';
 export * from './spatial.js';
 export * from './mapGen.js';
 export * from './protocol.js';
+export * from './weapons.js';
 export * from './physics/collision.js';
 export * from './physics/raycast.js';
 export * from './physics/vault.js';

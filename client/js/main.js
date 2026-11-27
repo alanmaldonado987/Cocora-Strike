@@ -20,7 +20,7 @@ import {
   CLIENT_PERF_CONFIG,
   AUDIO_CONFIG
 } from '/shared/mapData.js';
-import { SoundEngine } from './audio.js';
+import { SoundEngine } from './audio/audio.js';
 import { VoxelWorld } from './world.js';
 import { AVATAR_COLORS, LocalPlayerController, requestRawPointerLock } from './player.js';
 import { NetworkManager } from './net/network.js';

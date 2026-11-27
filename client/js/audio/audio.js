@@ -1,4 +1,4 @@
-// client/js/audio.js
+// client/js/audio/audio.js
 // Sintetizador Web Audio API en tiempo real (cero archivos externos):
 // - Planificador lookahead sobre reloj de hardware (AudioContext.currentTime) sin jitter de setInterval
 // - Gestor de polifonía con límite estricto de 24 voces (robo de la voz más lejana/antigua)

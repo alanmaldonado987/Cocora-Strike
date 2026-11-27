@@ -31,7 +31,7 @@ Regla: **extraer y organizar código sin cambiar comportamiento**. Un dominio po
 
 ### 1. Cliente (`client/js/`)
 - [x] `net/` — network.js, interpolation.js, prediction.js (prediction = métodos de reconciliación mezclados en `LocalPlayerController` vía `core/mixin.js`)
-- [ ] `audio/` — audio.js
+- [x] `audio/` — audio.js
 - [ ] `ui/` — hud.js, minimap.js, lobby.js, killfeed.js
 - [ ] `core/` — loop.js (paso fijo), quality.js, input.js
 - [ ] `player/` — avatar.js, animation.js, viewmodel.js, camera.js, controller.js, weapons.js
@@ -60,3 +60,4 @@ Regla: **extraer y organizar código sin cambiar comportamiento**. Un dominio po
 |---|---|---|
 | Infraestructura | `docs/FASE5_ESTADO.md`, `test/importGraph.test.js`, `package.json` | 82 pruebas en verde |
 | net | `client/js/net/{network,interpolation,prediction}.js`, `client/js/core/mixin.js`; imports en `main.js`, `world.js`, `player.js` y tests | 82 pruebas; humo OK |
+| audio | `client/js/audio.js` → `client/js/audio/audio.js`; imports en `main.js` y `test/audioEngine.test.js` | 82 pruebas |

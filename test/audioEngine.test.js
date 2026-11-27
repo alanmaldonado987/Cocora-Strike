@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AUDIO_CONFIG } from '../shared/mapData.js';
-import { SoundEngine, computeStereoPan } from '../client/js/audio.js';
+import { SoundEngine, computeStereoPan } from '../client/js/audio/audio.js';
 
 function createMockAudioContext() {
   const events = {

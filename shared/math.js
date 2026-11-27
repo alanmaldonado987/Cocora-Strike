@@ -84,6 +84,76 @@ export function stepCriticallyDampedSpring3D(pos, vel, target, omega, dt) {
   return pos;
 }
 
+/**
+ * Controlador de cadencia de disparo por acumulador de tiempo independiente de los FPS.
+ * Devuelve cuántos disparos deben ejecutarse en este paso `dt` (0..3).
+ */
+export function stepFireAccumulator(cadenceState, dt, triggerHeld, triggerPressed, fireIntervalSec, isAuto) {
+  if (!(dt >= 0) || !(fireIntervalSec > 0)) return 0;
+
+  if (!triggerHeld && !triggerPressed) {
+    cadenceState.cooldownSec = Math.max(0, (cadenceState.cooldownSec || 0) - dt);
+    cadenceState.burstActive = false;
+    return 0;
+  }
+
+  if (!isAuto) {
+    cadenceState.cooldownSec = Math.max(0, (cadenceState.cooldownSec || 0) - dt);
+    if (triggerPressed && cadenceState.cooldownSec <= 1e-7) {
+      cadenceState.cooldownSec = fireIntervalSec;
+      cadenceState.burstActive = false;
+      return 1;
+    }
+    return 0;
+  }
+
+  // Arma automática: conserva el remanente sub-fotograma para mantener DPS idéntico a 30/60/144 FPS
+  if (!cadenceState.burstActive) {
+    cadenceState.cooldownSec = Math.max(0, (cadenceState.cooldownSec || 0) - dt);
+    if (cadenceState.cooldownSec <= 1e-7) {
+      cadenceState.burstActive = true;
+      cadenceState.cooldownSec = fireIntervalSec;
+      return 1;
+    }
+    return 0;
+  }
+
+  cadenceState.cooldownSec -= dt;
+  let shots = 0;
+  while (cadenceState.cooldownSec <= 1e-7 && shots < 3) {
+    shots += 1;
+    cadenceState.cooldownSec += fireIntervalSec;
+  }
+  if (cadenceState.cooldownSec < 0) {
+    cadenceState.cooldownSec = 0;
+  }
+  return shots;
+}
+
+/**
+ * Resorte de retroceso visual de dos etapas (golpe rápido hacia el objetivo + retorno amortiguado al centro).
+ */
+export function stepRecoilSpring(recoilState, dt, cfg) {
+  if (!(dt > 0)) return recoilState;
+  const returnDecay = Math.exp(-cfg.recoilReturnOmega * dt);
+  recoilState.targetPitch *= returnDecay;
+  recoilState.targetYaw *= returnDecay;
+  if (Math.abs(recoilState.targetPitch) < 1e-5) recoilState.targetPitch = 0;
+  if (Math.abs(recoilState.targetYaw) < 1e-5) recoilState.targetYaw = 0;
+
+  const pitchSpring = { value: recoilState.pitch, vel: recoilState.pitchVel };
+  stepCriticallyDampedSpring(pitchSpring, recoilState.targetPitch, cfg.recoilKickOmega, dt);
+  recoilState.pitch = pitchSpring.value;
+  recoilState.pitchVel = pitchSpring.vel;
+
+  const yawSpring = { value: recoilState.yaw, vel: recoilState.yawVel };
+  stepCriticallyDampedSpring(yawSpring, recoilState.targetYaw, cfg.recoilKickOmega, dt);
+  recoilState.yaw = yawSpring.value;
+  recoilState.yawVel = yawSpring.vel;
+
+  return recoilState;
+}
+
 export function valueNoise2D(x, z, seed) {
   const ix = Math.floor(x);
   const iz = Math.floor(z);

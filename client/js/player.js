@@ -15,6 +15,7 @@ import {
   SIM_DT,
   MOVEMENT_CONFIG,
   CAMERA_FEEL_CONFIG,
+  WEAPON_FEEL_CONFIG,
   PLAYER_INPUT_BUTTONS,
   PLAYER_RADIUS,
   PLAYER_EYE_HEIGHT,
@@ -23,6 +24,8 @@ import {
   SWIM_CONFIG,
   stepCriticallyDampedSpring,
   stepCriticallyDampedSpring3D,
+  stepFireAccumulator,
+  stepRecoilSpring,
   applyEntitySeparation,
   raycastVoxels,
   createStepEvents,
@@ -73,6 +76,25 @@ export const AVATAR_COLORS = [
 
 function damp(current, target, lambda, dt) {
   return current + (target - current) * (1 - Math.exp(-lambda * dt));
+}
+
+// Solicita Pointer Lock sin aceleración del sistema operativo (unadjustedMovement) con fallback seguro
+export function requestRawPointerLock(element) {
+  if (!element?.requestPointerLock) return;
+  try {
+    const maybePromise = element.requestPointerLock({ unadjustedMovement: true });
+    if (maybePromise && typeof maybePromise.catch === 'function') {
+      maybePromise.catch(() => {
+        try {
+          element.requestPointerLock();
+        } catch {}
+      });
+    }
+  } catch {
+    try {
+      element.requestPointerLock();
+    } catch {}
+  }
 }
 
 // Vectores temporales reutilizables a nivel de módulo (CERO new THREE.Vector3 en animate / updateCamera / disparos)
@@ -1373,10 +1395,12 @@ export class LocalPlayerController {
     this.reloading = false;
     this.reloadStart = 0;
     this.reloadDuration = 1500;
-    this.lastShotAt = 0;
+    this.fireCadenceState = { cooldownSec: 0, burstActive: false };
+    this.recoilState = { targetPitch: 0, targetYaw: 0, pitch: 0, pitchVel: 0, yaw: 0, yawVel: 0 };
 
     this.keys = {};
     this.mouseDownLeft = false;
+    this.pendingShotPress = false;
     this.aimingZoom = false;
     this.pointerLocked = false;
 
@@ -1736,13 +1760,13 @@ export class LocalPlayerController {
       if (!this.active) return;
 
       if (!this.pointerLocked) {
-        this.domElement.requestPointerLock?.();
+        requestRawPointerLock(this.domElement);
         return;
       }
 
       if (e.button === 0) {
         this.mouseDownLeft = true;
-        this.tryFireShot();
+        this.pendingShotPress = true;
       } else if (e.button === 2) {
         this.aimingZoom = true;
       }
@@ -1753,6 +1777,16 @@ export class LocalPlayerController {
       if (e.button === 2) this.aimingZoom = false;
     });
 
+    window.addEventListener('blur', () => {
+      this.clearActiveInputs();
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        this.clearActiveInputs();
+      }
+    });
+
     window.addEventListener('contextmenu', (e) => {
       if (this.active) e.preventDefault();
     });
@@ -1760,8 +1794,7 @@ export class LocalPlayerController {
     document.addEventListener('pointerlockchange', () => {
       this.pointerLocked = document.pointerLockElement === this.domElement;
       if (!this.pointerLocked) {
-        this.mouseDownLeft = false;
-        this.aimingZoom = false;
+        this.clearActiveInputs();
       }
     });
 
@@ -1769,16 +1802,38 @@ export class LocalPlayerController {
       if (!this.pointerLocked || !this.active) return;
       const isSniperAds = this.aimingZoom && this.equipped === 'sniper';
       const sens = isSniperAds ? 0.00075 : this.aimingZoom ? 0.0014 : 0.0022;
-      this.yaw -= e.movementX * sens;
-      this.pitch = Math.max(-1.35, Math.min(1.25, this.pitch - e.movementY * sens));
+      const deltaYaw = -e.movementX * sens;
+      const deltaPitch = -e.movementY * sens;
+      this.yaw += deltaYaw;
+      // Si el jugador compensa el retroceso bajando el ratón, absorber primero el remanente del resorte
+      if (deltaPitch < 0 && this.recoilState.targetPitch > 0) {
+        const absorbed = Math.min(this.recoilState.targetPitch, -deltaPitch);
+        this.recoilState.targetPitch -= absorbed;
+        this.pitch = Math.max(-1.35, Math.min(1.25, this.pitch + (deltaPitch + absorbed)));
+      } else {
+        this.pitch = Math.max(-1.35, Math.min(1.25, this.pitch + deltaPitch));
+      }
       this.fpRig.addMouseSway(e.movementX, e.movementY);
     });
+  }
+
+  clearActiveInputs() {
+    for (const key of Object.keys(this.keys)) {
+      this.keys[key] = false;
+    }
+    this.mouseDownLeft = false;
+    this.pendingShotPress = false;
+    this.aimingZoom = false;
+    this.queuedButtonsMask = 0;
+    this.fireCadenceState.burstActive = false;
   }
 
   trySwitchWeapon(weaponId) {
     if (!this.weapons[weaponId]?.unlocked || this.equipped === weaponId) return;
     this.equipped = weaponId;
     this.reloading = false;
+    this.fireCadenceState.burstActive = false;
+    this.fireCadenceState.cooldownSec = Math.max(this.fireCadenceState.cooldownSec, 0.08);
     this.setEquippedWeaponVisual(weaponId, false);
     this.onSwitchWeaponRequest?.(weaponId);
   }
@@ -1790,47 +1845,76 @@ export class LocalPlayerController {
     if (wState.mag >= wSpec.magSize || this.reserveAmmo <= 0) return;
 
     this.reloading = true;
+    this.fireCadenceState.burstActive = false;
     this.reloadStart = performance.now();
     this.reloadDuration = wSpec.reloadMs;
     this.audio.playReload();
     this.onReloadRequest?.();
   }
 
-  tryFireShot(mapData = this.currentMap) {
-    if (!this.alive || this.state !== 'ground' || this.reloading || !mapData) return;
-    if (this.isSwimming) return; // el arma va guardada mientras se nada
+  processWeaponFireAfterCamera(dt, mapData = this.currentMap) {
+    const wSpec = WEAPONS[this.equipped];
+    const wState = this.weapons[this.equipped];
+    const canShootNow =
+      this.alive &&
+      this.state === 'ground' &&
+      !this.reloading &&
+      !this.isSwimming &&
+      Boolean(mapData) &&
+      Boolean(wSpec && wState?.unlocked);
 
+    const pressed = this.pendingShotPress;
+    this.pendingShotPress = false;
+
+    if (!canShootNow) {
+      stepFireAccumulator(this.fireCadenceState, dt, false, false, (wSpec?.fireRateMs || 200) / 1000, false);
+      return;
+    }
+
+    const fireIntervalSec = Math.max(0.03, (wSpec.fireRateMs || 200) / 1000);
+    const shots = stepFireAccumulator(
+      this.fireCadenceState,
+      dt,
+      this.mouseDownLeft,
+      pressed,
+      fireIntervalSec,
+      Boolean(wSpec.auto)
+    );
+
+    for (let s = 0; s < shots; s++) {
+      if (!this.executeSinglePostCameraShot(mapData, wSpec, wState)) {
+        this.fireCadenceState.burstActive = false;
+        break;
+      }
+    }
+  }
+
+  executeSinglePostCameraShot(mapData, wSpec, wState) {
     if (this.isHealing) {
       this.cancelClientHeal(true);
     }
 
-    const now = performance.now();
-    const wSpec = WEAPONS[this.equipped];
-    const wState = this.weapons[this.equipped];
-    if (!wSpec || !wState?.unlocked) return;
-    if (now - this.lastShotAt < wSpec.fireRateMs) return;
-
     if (wSpec.magSize > 0) {
       if (wState.mag <= 0) {
         this.tryReload();
-        return;
+        return false;
       }
       wState.mag -= 1;
     }
 
-    this.lastShotAt = now;
-    this.pitch = Math.min(1.25, this.pitch + (wSpec.recoil || 0.016));
-    this.avatar?.triggerFireEffect();
-    this.fpRig.triggerFire(this.equipped);
-
+    // Orientación exacta del fotograma actual (calculada justo después de updateCamera)
+    this.camera.updateMatrixWorld();
     this.camera.getWorldDirection(_fireCamDir);
 
+    const camX = this.x + (this.reconcileOffsetX || 0);
+    const camY = this.y + (this.reconcileOffsetY || 0);
+    const camZ = this.z + (this.reconcileOffsetZ || 0);
     const eyeH = this.isSliding
       ? PLAYER_SLIDE_EYE_HEIGHT
       : this.isCrouching
       ? PLAYER_CROUCH_EYE_HEIGHT
       : PLAYER_EYE_HEIGHT;
-    let origin = { x: this.x, y: this.y + eyeH, z: this.z };
+    let origin = { x: camX, y: camY + eyeH, z: camZ };
     _fireAimDir.copy(_fireCamDir);
 
     const sniperAds = this.aimingZoom && this.equipped === 'sniper';
@@ -1859,11 +1943,21 @@ export class LocalPlayerController {
       _fireAimDir.normalize();
     }
 
+    // Retroceso visual impulsado por resorte con retorno suave (tras emitir el rayo actual)
+    const kickBase = (wSpec.recoil || 0.016) * WEAPON_FEEL_CONFIG.recoilVisualMult * (this.aimingZoom ? 0.78 : 1.0);
+    this.recoilState.targetPitch = Math.min(0.28, this.recoilState.targetPitch + kickBase);
+    const yawJitter = (Math.random() - 0.5) * 2 * kickBase * WEAPON_FEEL_CONFIG.recoilHorizontalJitter;
+    this.recoilState.targetYaw = Math.max(-0.10, Math.min(0.10, this.recoilState.targetYaw + yawJitter));
+
+    this.avatar?.triggerFireEffect();
+    this.fpRig.triggerFire(this.equipped);
+
     this.onShootRequest?.({
       origin,
       dir: { x: _fireAimDir.x, y: _fireAimDir.y, z: _fireAimDir.z },
       weapon: this.equipped
     });
+    return true;
   }
 
   isSniperScoped() {
@@ -1885,9 +1979,7 @@ export class LocalPlayerController {
       return;
     }
 
-    if (this.mouseDownLeft && WEAPONS[this.equipped]?.auto) {
-      this.tryFireShot(mapData);
-    }
+    stepRecoilSpring(this.recoilState, dt, WEAPON_FEEL_CONFIG);
 
     let movingHoriz = false;
     const sprinting =
@@ -2128,6 +2220,10 @@ export class LocalPlayerController {
       ? Math.min(1, (performance.now() - this.reloadStart) / Math.max(1, this.reloadDuration))
       : 0;
 
+    // Primero orientar y posicionar la cámara del fotograma actual, y DESPUÉS resolver el disparo
+    this.updateCamera(dt, mapData, planeState, worldInstance, movingHoriz, sprinting, sniperAds);
+    this.processWeaponFireAfterCamera(dt, mapData);
+
     this.fpRig.update(dt, {
       visible: this.alive && this.cameraMode === 'first',
       state: this.state,
@@ -2140,8 +2236,6 @@ export class LocalPlayerController {
       reloading: this.reloading,
       reloadProgress
     });
-
-    this.updateCamera(dt, mapData, planeState, worldInstance, movingHoriz, sprinting, sniperAds);
   }
 
   updateCamera(dt, mapData, planeState, worldInstance, movingHoriz, sprinting, sniperAds) {
@@ -2162,9 +2256,11 @@ export class LocalPlayerController {
       shakeY = (Math.random() - 0.5) * 2 * amp;
     }
 
-    const cosP = Math.cos(this.pitch);
-    _camLookDir.set(Math.sin(this.yaw) * cosP, Math.sin(this.pitch), Math.cos(this.yaw) * cosP).normalize();
-    _camRightVec.set(-Math.cos(this.yaw), 0, Math.sin(this.yaw));
+    const viewYaw = this.yaw + (this.recoilState?.yaw || 0);
+    const viewPitch = Math.max(-1.42, Math.min(1.32, this.pitch + (this.recoilState?.pitch || 0)));
+    const cosP = Math.cos(viewPitch);
+    _camLookDir.set(Math.sin(viewYaw) * cosP, Math.sin(viewPitch), Math.cos(viewYaw) * cosP).normalize();
+    _camRightVec.set(-Math.cos(viewYaw), 0, Math.sin(viewYaw));
 
     if (this.alive && this.state === 'plane' && planeState && worldInstance) {
       const rig = worldInstance.getActiveAircraftRig?.();

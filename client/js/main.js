@@ -20,7 +20,7 @@ import {
 } from '/shared/mapData.js';
 import { SoundEngine } from './audio.js';
 import { VoxelWorld } from './world.js';
-import { AVATAR_COLORS, LocalPlayerController } from './player.js';
+import { AVATAR_COLORS, LocalPlayerController, requestRawPointerLock } from './player.js';
 import { NetworkManager } from './network.js';
 import { preloadExternalModelAssets } from '/Modelos%203D/cocoraModels.js';
 
@@ -802,7 +802,7 @@ const net = new NetworkManager(scene, {
     ui.targetHud?.classList.add('hidden');
     ui.hudScreen.classList.remove('hidden');
     ui.killfeed.innerHTML = '';
-    renderer.domElement.requestPointerLock?.();
+    requestRawPointerLock(renderer.domElement);
     warmUpGpu();
     queueMapWarmUp();
   },

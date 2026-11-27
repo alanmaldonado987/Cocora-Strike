@@ -12,7 +12,7 @@ import {
   AUDIO_CONFIG
 } from '/shared/mapData.js';
 import { SoundEngine } from './audio/audio.js';
-import { VoxelWorld } from './world.js';
+import { VoxelWorld } from './world/world.js';
 import { LocalPlayerController } from './player/controller.js';
 import { requestRawPointerLock } from './core/input.js';
 import { createRenderer, createGpuWarmUp } from './core/quality.js';

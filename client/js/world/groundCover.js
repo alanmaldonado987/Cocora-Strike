@@ -1,4 +1,4 @@
-// client/js/groundCover.js
+// client/js/world/groundCover.js
 // Cobertura vegetal densa del suelo: matas de pasto y flores silvestres alrededor del jugador.
 //
 // Cubre las superficies de pasto (valle, montaña, terrazas de café) para que no se vea tierra
@@ -20,7 +20,6 @@ const MAX_GROUND_CLEARANCE = 45; // por encima de esto (cayendo del avión) no h
 const GRASS_SPACING = 0.85; // separación media entre matas (con variación)
 const TILES_PER_FRAME = 2;
 const BOUNDS_PADDING = 1.5;
-
 const GRASS_SURFACES = new Set([SURFACE.GRASS_VALLEY, SURFACE.GRASS_MOUNTAIN, SURFACE.COFFEE_TERRACE]);
 
 const FLOWER_COLORS = ['#f8fafc', '#facc15', '#ef4444', '#a855f7', '#fb923c', '#f472b6', '#7dd3fc', '#fde047']

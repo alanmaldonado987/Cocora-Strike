@@ -284,6 +284,7 @@ export class VoxelWorld {
       }
 
       const activeRig = this.getActiveAircraftRig();
+      this.driveActiveAircraft(planeState, viewerPos);
       activeRig?.update(dt, { pitch: turbPitch, roll: turbRoll });
     } else {
       this.planeMesh.visible = false;

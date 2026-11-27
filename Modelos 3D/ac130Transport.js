@@ -1097,7 +1097,10 @@ export function buildAC130Transport(addLightAnchorFn = null) {
 
     /** Enciende/apaga la luz tenue de bodega (p. ej. apagarla en calidad baja); usa el pool global de luces. */
     setInteriorLight(on) {
-      if (interiorLight) interiorLight.userData.light.intensity = on ? INTERIOR_LIGHT_INTENSITY : 0;
+      if (!interiorLight) return;
+      // Oculto, el pool de luces lo descarta y cede su PointLight a otro anclaje del mapa
+      interiorLight.visible = Boolean(on);
+      interiorLight.userData.light.intensity = on ? INTERIOR_LIGHT_INTENSITY : 0;
     },
 
     /** Afustes articulados expuestos (pan/tilt/recoil/spinCluster) para depuración y pruebas. */

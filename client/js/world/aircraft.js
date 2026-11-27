@@ -5,7 +5,13 @@
 import * as THREE from 'three';
 import { buildAC130Transport } from '/Modelos%203D/ac130Transport.js';
 import { buildCH47Transport } from '/Modelos%203D/ch47Transport.js';
+import { PLAYER_STATE } from '/shared/mapData.js';
 import { _tmpVecA, _tmpVecB, _yAxis } from './common.js';
+import { createAircraftCommands, computeAircraftCommands } from './aircraftDirector.js';
+
+// Órdenes del fotograma reutilizadas (cero asignaciones) y punto de mira temporal
+const _aircraftCmds = createAircraftCommands();
+const _aimTarget = new THREE.Vector3();
 
 export const aircraftMethods = {
   resetPlaneTracking(planeState) {
@@ -17,6 +23,7 @@ export const aircraftMethods = {
       this.setActiveAircraft(planeState.aircraftType);
     }
     this.getActiveAircraftRig()?.resetFlight();
+    this.planeOccupied = true; // nueva ronda: la bodega arranca llena y la rampa se abre
     this.planeServerPredPos.set(planeState.x, planeState.y, planeState.z);
     this.planeSmoothPos.set(planeState.x, planeState.y, planeState.z);
     this.planeVelocity.set(planeState.vx || 0, 0, planeState.vz || 0);
@@ -51,6 +58,9 @@ export const aircraftMethods = {
     this.activeAircraftId = nextId;
     this.aircraftRigs.ac130.group.visible = nextId === 'ac130';
     this.aircraftRigs.ch47.group.visible = nextId === 'ch47';
+    // La aeronave oculta no debe reservar una PointLight del pool
+    if (nextId !== 'ac130') this.aircraftRigs.ac130.setInteriorLight?.(false);
+    if (nextId !== 'ch47') this.aircraftRigs.ch47.setInteriorLight?.(false);
     if (changed && nextRig) {
       nextRig.resetFlight();
       if (prevRig?.cabinBayGroup && nextRig.cabinBayGroup) {
@@ -59,6 +69,29 @@ export const aircraftMethods = {
         }
       }
     }
+  },
+
+  /** Snapshot del servidor: ¿queda alguien vivo a bordo? (lo fija main.js en cada world_tick) */
+  setPlaneOccupied(occupied) {
+    this.planeOccupied = Boolean(occupied);
+  },
+
+  /**
+   * Conecta la API articulada (Bloque 6A) con la partida real: potencia, rampa, apuntado y fuego derivados del
+   * estado autoritativo del avión; luz de bodega solo con el jugador local a bordo (libera el pool de luces).
+   * @param {object} planeState estado `plane` del world_tick
+   * @param {{ state?: string } | null} viewer jugador local
+   */
+  driveActiveAircraft(planeState, viewer) {
+    const rig = this.getActiveAircraftRig();
+    if (!rig || !rig.setThrottle) return;
+    const occupied = this.planeOccupied !== false;
+    computeAircraftCommands(planeState, this.planeSmoothPos, occupied, _aircraftCmds);
+    rig.setThrottle(_aircraftCmds.throttle);
+    rig.setDoorsOpen(_aircraftCmds.doorsOpen);
+    rig.aimTurrets(_aimTarget.set(_aircraftCmds.aimX, _aircraftCmds.aimY, _aircraftCmds.aimZ));
+    rig.setFiring(_aircraftCmds.firing);
+    rig.setInteriorLight?.(viewer?.state === PLAYER_STATE.PLANE);
   },
 
   getActiveAircraftRig() {

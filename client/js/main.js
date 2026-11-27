@@ -31,6 +31,7 @@ import { createHud } from './ui/hud.js';
 import { createMinimap } from './ui/minimap.js';
 import { createKillfeed } from './ui/killfeed.js';
 import { createLobby } from './ui/lobby.js';
+import { isPlaneOccupied } from './world/aircraftDirector.js';
 import { preloadExternalModelAssets } from '/Modelos%203D/cocoraModels.js';
 
 const container = document.getElementById('game-container');
@@ -184,6 +185,7 @@ const net = new NetworkManager(scene, {
 
   onWorldTick(snapshot) {
     planeState = snapshot.plane;
+    if (planeState?.active) world.setPlaneOccupied(isPlaneOccupied(snapshot.players, PLAYER_STATE.PLANE));
     stormState = snapshot.storm;
     if (snapshot.wildlife) {
       world.syncWildlife(snapshot.wildlife, snapshot.t);

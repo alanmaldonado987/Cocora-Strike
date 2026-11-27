@@ -23,6 +23,7 @@ import {
   PLAYER_STATE
 } from '/shared/mapData.js';
 import { createWeaponInventory } from '/shared/weapons.js';
+import { capturePredictionCarry } from '/shared/physics/reconcile.js';
 import { inputMethods } from '../core/input.js';
 import { mixMethods } from '../core/mixin.js';
 import { predictionMethods } from '../net/prediction.js';
@@ -403,6 +404,9 @@ export class LocalPlayerController {
           if (this.state === PLAYER_STATE.GROUND && !this.isVaulting && remoteEntities.length > 0) {
             applyEntitySeparation(this, remoteEntities, PLAYER_RADIUS, SIM_DT, mapData);
           }
+
+          // Estado interno tras este paso: la reconciliación lo retoma en lastSeq (ver shared/physics/reconcile.js)
+          cmd.carry = capturePredictionCarry(this);
 
           this.pendingNetSteps.push(cmd);
           if (this.pendingNetSteps.length > 24) this.pendingNetSteps.shift();

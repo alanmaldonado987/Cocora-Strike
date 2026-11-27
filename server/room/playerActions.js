@@ -109,11 +109,11 @@ export const playerActionsMethods = {
     if (this.phase !== GAME_PHASE.PLAYING) return;
     const p = this.players.get(socketId);
     if (!p || !p.alive || p.state !== PLAYER_STATE.GROUND) return;
-    p.isSliding = Boolean(payload.active);
-    if (p.isSliding) {
-      p.isCrouching = false;
-      this.io.emit(S2C.PLAYER_SLID, { playerId: p.id, x: p.x, y: p.y, z: p.z, yaw: p.yaw });
-    }
+    // El slide lo decide SOLO la simulación compartida (botón SLIDE en los pasos de player_input), que además
+    // emite PLAYER_SLID. Este aviso llega antes que el lote de pasos: si forzaba isSliding aquí, el servidor
+    // deslizaba con la dirección/velocidad del slide anterior y el cliente era devuelto a ese punto en cada
+    // snapshot. Se acepta por compatibilidad pero no toca el estado.
+    void payload;
   },
 
   getParticipantHeight(p) {

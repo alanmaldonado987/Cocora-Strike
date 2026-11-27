@@ -12,7 +12,8 @@ import {
   PLAYER_SLIDE_EYE_HEIGHT,
   stepCriticallyDampedSpring,
   stepCriticallyDampedSpring3D,
-  raycastVoxels
+  raycastVoxels,
+  PLAYER_STATE
 } from '/shared/mapData.js';
 
 const _camLookDir = new THREE.Vector3();
@@ -54,7 +55,7 @@ export const cameraMethods = {
   },
 
   toggleCameraMode() {
-    if (this.state === 'plane') {
+    if (this.state === PLAYER_STATE.PLANE) {
       if (this.planeViewMode === 'cabin_third') {
         this.planeViewMode = 'cabin_first';
         this.cameraMode = 'first';
@@ -99,7 +100,7 @@ export const cameraMethods = {
     _camLookDir.set(Math.sin(viewYaw) * cosP, Math.sin(viewPitch), Math.cos(viewYaw) * cosP).normalize();
     _camRightVec.set(-Math.cos(viewYaw), 0, Math.sin(viewYaw));
 
-    if (this.alive && this.state === 'plane' && planeState && worldInstance) {
+    if (this.alive && this.state === PLAYER_STATE.PLANE && planeState && worldInstance) {
       const rig = worldInstance.getActiveAircraftRig?.();
       const targetPlaneFov = this.planeViewMode === 'plane_exterior' ? 74 : 76;
       const newPlaneFov = stepCriticallyDampedSpring(this.fovSpring, targetPlaneFov, CAMERA_FEEL_CONFIG.fovSpringOmega, dt);
@@ -154,7 +155,7 @@ export const cameraMethods = {
 
     const canApplyBob =
       this.headBobEnabled &&
-      this.state === 'ground' &&
+      this.state === PLAYER_STATE.GROUND &&
       movingHoriz &&
       this.onGround &&
       !this.isSliding &&
@@ -165,7 +166,7 @@ export const cameraMethods = {
 
     if ((this.cameraMode === 'first' || sniperAds) && this.alive) {
       let targetFov = CAMERA_FEEL_CONFIG.baseFirstFov + sprintFovDelta;
-      if (this.state === 'skydiving') targetFov = 86 + Math.min(8, this.currentDescentSpeed * 0.18);
+      if (this.state === PLAYER_STATE.SKYDIVING) targetFov = 86 + Math.min(8, this.currentDescentSpeed * 0.18);
       else if (this.aimingZoom && this.equipped !== 'fists') targetFov = wSpec.adsFov || 56;
       const newFirstFov = stepCriticallyDampedSpring(this.fovSpring, targetFov, CAMERA_FEEL_CONFIG.fovSpringOmega, dt);
       if (Math.abs(newFirstFov - this.camera.fov) > 0.005) {
@@ -208,7 +209,7 @@ export const cameraMethods = {
     let targetFov = this.aimingZoom
       ? (wSpec.adsFov || 54)
       : CAMERA_FEEL_CONFIG.baseThirdFov + sprintFovDelta;
-    if (this.state === 'skydiving') targetFov = 76 + Math.min(8, this.currentDescentSpeed * 0.2);
+    if (this.state === PLAYER_STATE.SKYDIVING) targetFov = 76 + Math.min(8, this.currentDescentSpeed * 0.2);
     const newThirdFov = stepCriticallyDampedSpring(this.fovSpring, targetFov, CAMERA_FEEL_CONFIG.fovSpringOmega, dt);
     if (Math.abs(newThirdFov - this.camera.fov) > 0.005) {
       this.camera.fov = newThirdFov;
@@ -219,7 +220,7 @@ export const cameraMethods = {
     let shoulderOffset = this.aimingZoom ? 0.78 : 0.54;
     let targetPivotH = this.isSliding ? 1.05 : this.isCrouching ? 1.30 : this.aimingZoom ? 1.74 : 1.66;
 
-    if (this.state === 'skydiving' || this.state === 'parachuting') {
+    if (this.state === PLAYER_STATE.SKYDIVING || this.state === PLAYER_STATE.PARACHUTING) {
       desiredDist = 5.8;
       shoulderOffset = 0.18;
       targetPivotH = 1.75;

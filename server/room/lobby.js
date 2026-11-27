@@ -9,7 +9,10 @@ import {
   PARACHUTE_CONFIG,
   SWIM_CONFIG,
   generateCocoraMap,
-  createRNG
+  createRNG,
+  GAME_PHASE,
+  MOVE_MODE,
+  PLAYER_STATE
 } from '../../shared/mapData.js';
 import { BOT_NAMES } from './constants.js';
 import { S2C, quantize } from '../../shared/protocol.js';
@@ -17,10 +20,10 @@ import { S2C, quantize } from '../../shared/protocol.js';
 export const lobbyMethods = {
   addHumanPlayer(socket, nickname) {
     const p = this.createFreshParticipant(socket.id, nickname, false);
-    if (this.phase === 'playing') {
+    if (this.phase === GAME_PHASE.PLAYING) {
       p.alive = false;
       p.spectating = true;
-      p.state = 'spectating';
+      p.state = PLAYER_STATE.SPECTATING;
       p.x = 56;
       p.y = 58;
       p.z = 4;
@@ -48,7 +51,7 @@ export const lobbyMethods = {
   removePlayer(socketId) {
     const p = this.players.get(socketId);
     if (!p) return;
-    const wasPlayingAlive = this.phase === 'playing' && p.alive && !p.spectating;
+    const wasPlayingAlive = this.phase === GAME_PHASE.PLAYING && p.alive && !p.spectating;
     this.players.delete(socketId);
 
     if (wasPlayingAlive) {
@@ -71,7 +74,7 @@ export const lobbyMethods = {
   },
 
   configureBots({ botDifficulty, botCount, aircraftType } = {}) {
-    if (this.phase !== 'lobby') return;
+    if (this.phase !== GAME_PHASE.LOBBY) return;
     if (botDifficulty && BOT_DIFFICULTIES[botDifficulty]) {
       this.botDifficulty = botDifficulty;
     }
@@ -86,7 +89,7 @@ export const lobbyMethods = {
   },
 
   syncLobbyBotsCount(targetBots) {
-    if (this.phase !== 'lobby') return;
+    if (this.phase !== GAME_PHASE.LOBBY) return;
     const clamped = Math.max(0, Math.min(8, targetBots));
     const currentBots = Array.from(this.players.values()).filter((p) => p.isBot);
 
@@ -118,14 +121,14 @@ export const lobbyMethods = {
   },
 
   addBot() {
-    if (this.phase !== 'lobby') return;
+    if (this.phase !== GAME_PHASE.LOBBY) return;
     this._spawnOneBot();
     this.desiredBotCount = Array.from(this.players.values()).filter((p) => p.isBot).length;
     this.broadcastLobbyState();
   },
 
   clearBots() {
-    if (this.phase !== 'lobby') return;
+    if (this.phase !== GAME_PHASE.LOBBY) return;
     for (const [id, p] of this.players.entries()) {
       if (p.isBot) this.players.delete(id);
     }
@@ -134,7 +137,7 @@ export const lobbyMethods = {
   },
 
   checkAutoLobbyStart() {
-    if (this.phase !== 'lobby') return;
+    if (this.phase !== GAME_PHASE.LOBBY) return;
     const humans = Array.from(this.players.values()).filter((p) => !p.isBot);
     if (humans.length >= 2 && this.lobbyCountdown === null) {
       this.lobbyCountdown = 10;
@@ -163,7 +166,7 @@ export const lobbyMethods = {
   },
 
   startGame({ autoFillBots = false, botCount, botDifficulty, aircraftType } = {}) {
-    if (this.phase === 'playing') return;
+    if (this.phase === GAME_PHASE.PLAYING) return;
 
     if (botDifficulty && BOT_DIFFICULTIES[botDifficulty]) {
       this.botDifficulty = botDifficulty;
@@ -183,7 +186,7 @@ export const lobbyMethods = {
       this._spawnOneBot();
     }
 
-    this.phase = 'playing';
+    this.phase = GAME_PHASE.PLAYING;
     this.lobbyCountdown = null;
     this.matchStartTime = Date.now();
     this.stormDamageAccum = 0;
@@ -245,7 +248,7 @@ export const lobbyMethods = {
       p.maxHp = 100;
       p.kills = 0;
       p.placement = 0;
-      p.state = 'plane';
+      p.state = PLAYER_STATE.PLANE;
       p.x = this.plane.x;
       p.y = this.plane.y;
       p.z = this.plane.z;
@@ -255,7 +258,7 @@ export const lobbyMethods = {
       p.onGround = false;
       p.isSliding = false;
       p.isCrouching = false;
-      p.moveMode = 'seated';
+      p.moveMode = MOVE_MODE.SEATED;
       p.jumpAltitude = PARACHUTE_CONFIG.planeHeightAboveValley;
       p.fallPeakY = this.plane.y;
       p.lastAlertedById = null;
@@ -298,7 +301,7 @@ export const lobbyMethods = {
   },
 
   resetToLobby(removeBots = false) {
-    this.phase = 'lobby';
+    this.phase = GAME_PHASE.LOBBY;
     this.plane = null;
     this.loot.clear();
     this.wildlife.clear();
@@ -315,7 +318,7 @@ export const lobbyMethods = {
       p.kills = 0;
       p.isSliding = false;
       p.isCrouching = false;
-      p.state = 'lobby';
+      p.state = PLAYER_STATE.LOBBY;
     }
 
     if (!removeBots) {

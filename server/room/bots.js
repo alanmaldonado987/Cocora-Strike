@@ -21,7 +21,9 @@ import {
   applyEntitySeparation,
   stepCharacterPhysics,
   senseObstacleAhead,
-  hasLineOfSight
+  hasLineOfSight,
+  MOVE_MODE,
+  PLAYER_STATE
 } from '../../shared/mapData.js';
 import { normalizeAngle } from './constants.js';
 
@@ -133,7 +135,7 @@ export const botsMethods = {
     if (!ai) return;
     const diffCfg = BOT_DIFFICULTIES[this.botDifficulty] || BOT_DIFFICULTIES.easy;
 
-    if (bot.state === 'plane') {
+    if (bot.state === PLAYER_STATE.PLANE) {
       if (this.plane && this.plane.elapsed >= ai.jumpDelay) {
         this.handlePlayerJump(bot.id);
         const poi = this.map.landmarks[Math.floor(Math.random() * this.map.landmarks.length)];
@@ -145,14 +147,14 @@ export const botsMethods = {
       return;
     }
 
-    if (bot.state === 'skydiving' || bot.state === 'parachuting') {
+    if (bot.state === PLAYER_STATE.SKYDIVING || bot.state === PLAYER_STATE.PARACHUTING) {
       const tx = ai.targetPoint ? ai.targetPoint.x : 56;
       const tz = ai.targetPoint ? ai.targetPoint.z : 4;
       const dx = tx - bot.x;
       const dz = tz - bot.z;
       const d = Math.hypot(dx, dz) || 1;
       const hSpeed =
-        bot.state === 'skydiving'
+        bot.state === PLAYER_STATE.SKYDIVING
           ? PARACHUTE_CONFIG.freefallHorizontalSpeed * 0.85
           : PARACHUTE_CONFIG.canopyHorizontalSpeed * 0.85;
 
@@ -162,7 +164,7 @@ export const botsMethods = {
       const targetDescent = computeTargetDescentSpeed(bot.jumpAltitude || PARACHUTE_CONFIG.planeHeightAboveValley, bot.state, 0);
       const currentDesc = Math.max(0, -bot.vy);
       const accel =
-        bot.state === 'parachuting'
+        bot.state === PLAYER_STATE.PARACHUTING
           ? PARACHUTE_CONFIG.canopyOpenDecel
           : PARACHUTE_CONFIG.freefallGravityAccel;
       const nextDesc =
@@ -172,20 +174,20 @@ export const botsMethods = {
 
       bot.vy = -nextDesc;
       bot.y += bot.vy * dt;
-      bot.moveMode = 'fall';
+      bot.moveMode = MOVE_MODE.FALL;
 
       const supportY = this.map.getFloorBelowY(bot.x, bot.y + 1.2, bot.z);
-      if (bot.state === 'skydiving' && bot.y - supportY <= PARACHUTE_CONFIG.autoDeployHeight) {
-        bot.state = 'parachuting';
+      if (bot.state === PLAYER_STATE.SKYDIVING && bot.y - supportY <= PARACHUTE_CONFIG.autoDeployHeight) {
+        bot.state = PLAYER_STATE.PARACHUTING;
         bot.fallPeakY = bot.y;
       }
       if (bot.y <= supportY + 0.16) {
         bot.y = supportY;
         bot.vy = 0;
         bot.onGround = true;
-        bot.state = 'ground';
+        bot.state = PLAYER_STATE.GROUND;
         bot.fallPeakY = supportY;
-        bot.moveMode = 'idle';
+        bot.moveMode = MOVE_MODE.IDLE;
         ai.stuckRefX = bot.x;
         ai.stuckRefZ = bot.z;
         ai.stuckTimer = 0;
@@ -212,7 +214,7 @@ export const botsMethods = {
       ai.nextVisionCheckAt = now + BOT_AI_CONFIG.visionIntervalMs;
       for (let i = 0; i < allParticipants.length; i++) {
         const other = allParticipants[i];
-        if (other.id === bot.id || !other.alive || other.state === 'plane' || other.spectating) continue;
+        if (other.id === bot.id || !other.alive || other.state === PLAYER_STATE.PLANE || other.spectating) continue;
         const d = Math.hypot(other.x - bot.x, other.z - bot.z);
         if (d < nearestEnemyDist && this.canBotSeeTarget(bot, other, nearestEnemyDist, now)) {
           nearestEnemy = other;
@@ -222,7 +224,7 @@ export const botsMethods = {
       ai.cachedTargetId = nearestEnemy ? nearestEnemy.id : null;
     } else if (ai.cachedTargetId) {
       const cached = this.players.get(ai.cachedTargetId);
-      if (cached && cached.alive && cached.state !== 'plane' && !cached.spectating) {
+      if (cached && cached.alive && cached.state !== PLAYER_STATE.PLANE && !cached.spectating) {
         const d = Math.hypot(cached.x - bot.x, cached.z - bot.z);
         if (d <= diffCfg.visionRange) {
           nearestEnemy = cached;
@@ -456,15 +458,15 @@ export const botsMethods = {
     const movedStep = Math.hypot(bot.x - prevX, bot.z - prevZ);
     bot.animWalk = movedStep > 0.01 ? bot.animWalk + dt * (moveSpeed > 6.5 ? 12 : 8.5) : bot.animWalk;
     bot.moveMode = bot.isSliding
-      ? 'slide'
+      ? MOVE_MODE.SLIDE
       : !bot.onGround
       ? bot.vy > 0.6
-        ? 'jump'
-        : 'fall'
+        ? MOVE_MODE.JUMP
+        : MOVE_MODE.FALL
       : movedStep > 0.01
       ? moveSpeed > 6.5
-        ? 'sprint'
-        : 'walk'
-      : 'idle';
+        ? MOVE_MODE.SPRINT
+        : MOVE_MODE.WALK
+      : MOVE_MODE.IDLE;
   }
 };

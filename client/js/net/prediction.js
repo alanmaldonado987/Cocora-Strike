@@ -5,7 +5,7 @@
 // - resetPredictionBuffers: limpia acumuladores y colas de pasos sin confirmar.
 // - reconcileWithServer: re-simula los pasos no confirmados desde el snapshot del servidor y suaviza el error.
 
-import { SIM_DT, stepPlayer } from '/shared/mapData.js';
+import { SIM_DT, stepPlayer, PLAYER_STATE } from '/shared/mapData.js';
 
 export const predictionMethods = {
   flushPendingNetworkSteps() {
@@ -29,7 +29,7 @@ export const predictionMethods = {
   },
 
   reconcileWithServer(meSnapshot, mapData) {
-    if (!meSnapshot || !mapData || this.state === 'plane' || !this.alive) return;
+    if (!meSnapshot || !mapData || this.state === PLAYER_STATE.PLANE || !this.alive) return;
     const ackSeq = meSnapshot.lastSeq || 0;
     if (ackSeq <= 0) return;
 

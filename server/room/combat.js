@@ -6,16 +6,19 @@ import {
   PLAYER_RADIUS,
   WEAPONS,
   raycastVoxels,
-  hasLineOfSight
+  hasLineOfSight,
+  GAME_PHASE,
+  PLAYER_STATE,
+  WILDLIFE_STATE
 } from '../../shared/mapData.js';
 import { positionAt, resolveRewindTime } from './lagCompensation.js';
 import { S2C } from '../../shared/protocol.js';
 
 export const combatMethods = {
   handleShoot(socketId, payload) {
-    if (this.phase !== 'playing') return;
+    if (this.phase !== GAME_PHASE.PLAYING) return;
     const shooter = this.players.get(socketId);
-    if (!shooter || !shooter.alive || shooter.state !== 'ground') return;
+    if (!shooter || !shooter.alive || shooter.state !== PLAYER_STATE.GROUND) return;
     if (shooter.isSwimming) return; // nadando el arma va guardada
     if (!payload || !payload.origin || !payload.dir) return;
 
@@ -68,7 +71,7 @@ export const combatMethods = {
       for (const animal of this.wildlife.values()) {
         if (!animal.alive || animal.species !== 'capybara') continue;
         if (Math.hypot(animal.x - shooter.x, animal.z - shooter.z) < 16) {
-          animal.aiState = 'fleeing';
+          animal.aiState = WILDLIFE_STATE.FLEEING;
           animal.pose = 'run';
           animal.fleeFromX = shooter.x;
           animal.fleeFromZ = shooter.z;
@@ -76,7 +79,7 @@ export const combatMethods = {
         }
       }
       for (const other of this.players.values()) {
-        if (other.isBot && other.alive && other.id !== shooter.id && other.state === 'ground') {
+        if (other.isBot && other.alive && other.id !== shooter.id && other.state === PLAYER_STATE.GROUND) {
           if (Math.hypot(other.x - shooter.x, other.z - shooter.z) < 42) {
             other.lastAlertedById = shooter.id;
             other.alertedUntil = now + 4500;
@@ -110,7 +113,7 @@ export const combatMethods = {
       let isHeadshot = false;
 
       for (const target of this.players.values()) {
-        if (target.id === shooter.id || !target.alive || target.state === 'plane' || target.spectating) continue;
+        if (target.id === shooter.id || !target.alive || target.state === PLAYER_STATE.PLANE || target.spectating) continue;
         const pos = rewindTime === null ? target : positionAt(target, rewindTime);
         const hit = this.intersectRayPlayer(origin, dir, target, bestDist, pos);
         if (hit && hit.dist < bestDist) {
@@ -273,7 +276,7 @@ export const combatMethods = {
   },
 
   damagePlayer(victim, amount, attacker, sourceName, isHeadshot = false, hitPoint = null) {
-    if (!victim.alive || this.phase !== 'playing' || amount <= 0) return;
+    if (!victim.alive || this.phase !== GAME_PHASE.PLAYING || amount <= 0) return;
 
     victim.hp = Math.max(0, victim.hp - amount);
 
@@ -296,7 +299,7 @@ export const combatMethods = {
       victim.isCrouching = false;
       victim.healingUntil = 0;
       victim.healingItem = null;
-      victim.state = 'dead';
+      victim.state = PLAYER_STATE.DEAD;
       victim.placement = aliveBefore;
 
       if (attacker && attacker.id && attacker.id !== victim.id && this.players.has(attacker.id)) {
@@ -336,11 +339,11 @@ export const combatMethods = {
   },
 
   checkWinCondition() {
-    if (this.phase !== 'playing') return;
+    if (this.phase !== GAME_PHASE.PLAYING) return;
 
     const aliveList = Array.from(this.players.values()).filter((p) => p.alive && !p.spectating);
     if (aliveList.length <= 1) {
-      this.phase = 'ended';
+      this.phase = GAME_PHASE.ENDED;
       const winner = aliveList[0] || null;
       if (winner) winner.placement = 1;
 

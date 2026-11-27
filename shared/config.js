@@ -1,6 +1,64 @@
 // shared/config.js
 // Constantes del juego: mundo, jugador, armas, botín, bots, tormenta, caída y paracaídas.
 
+// ==================== ESTADOS (constantes congeladas) ====================
+// Valores en cable idénticos a los strings históricos: cliente, servidor y snapshots siguen siendo compatibles.
+// Usar siempre estas constantes en lugar de strings sueltos ('ground', 'skydiving', ...).
+
+/** Estado de alto nivel de un jugador (humano o bot). */
+export const PLAYER_STATE = Object.freeze({
+  LOBBY: 'lobby',
+  PLANE: 'plane',
+  SKYDIVING: 'skydiving',
+  PARACHUTING: 'parachuting',
+  GROUND: 'ground',
+  SWIMMING: 'swimming',
+  DEAD: 'dead',
+  SPECTATING: 'spectating'
+});
+
+/** Modo de movimiento (anima el avatar y ajusta ruido/velocidad). */
+export const MOVE_MODE = Object.freeze({
+  IDLE: 'idle',
+  STAND: 'stand',
+  WALK: 'walk',
+  CROUCH_IDLE: 'crouch_idle',
+  CROUCH_WALK: 'crouch_walk',
+  SPRINT: 'sprint',
+  SLIDE: 'slide',
+  VAULT: 'vault',
+  JUMP: 'jump',
+  FALL: 'fall',
+  SWIM: 'swim',
+  SWIM_FAST: 'swim_fast',
+  SWIM_IDLE: 'swim_idle',
+  SWIMMING: 'swimming', // legado: lo compara la animación del avatar; la simulación no lo asigna
+  SEATED: 'seated',
+  WALK_CABIN: 'walk_cabin',
+  RAMP_JUMP: 'ramp_jump'
+});
+
+/** Fase de la sala de juego en el servidor. */
+export const GAME_PHASE = Object.freeze({
+  LOBBY: 'lobby',
+  PLAYING: 'playing',
+  ENDED: 'ended'
+});
+
+/** Estado del cierre de la tormenta. */
+export const STORM_STATE = Object.freeze({
+  WAITING: 'waiting',
+  SHRINKING: 'shrinking',
+  CLOSED: 'closed'
+});
+
+/** Estado de IA de la fauna. */
+export const WILDLIFE_STATE = Object.freeze({
+  PEACEFUL: 'peaceful',
+  HOSTILE: 'hostile',
+  FLEEING: 'fleeing'
+});
+
 export const CELL_SIZE = 2.0;
 export const BLOCK_SIZE = CELL_SIZE;
 export const GRID_SIZE = 320; // 320 x 2m = 640 x 640 metros reales (-320m a +320m)
@@ -487,7 +545,7 @@ export function getJumpHeightFactor(jumpAltitude = 198, cfg = PARACHUTE_CONFIG) 
 
 export function computeTargetDescentSpeed(jumpAltitude, state, pitch = 0, cfg = PARACHUTE_CONFIG) {
   const factor = getJumpHeightFactor(jumpAltitude, cfg);
-  if (state === 'parachuting') {
+  if (state === PLAYER_STATE.PARACHUTING) {
     const baseCanopy = cfg.canopyMinSpeed + (cfg.canopyMaxSpeed - cfg.canopyMinSpeed) * factor;
     const pitchMod = pitch < -0.25 ? Math.min(1.4, (-pitch - 0.25) * 1.8) : 0;
     return Math.max(5.5, baseCanopy + pitchMod);

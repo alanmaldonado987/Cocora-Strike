@@ -7,7 +7,8 @@ import {
   WEAPONS,
   LOOT_TYPES,
   getRiverCenterWorldX,
-  hasLineOfSight
+  hasLineOfSight,
+  PLAYER_STATE
 } from '../../shared/mapData.js';
 import { S2C, quantize } from '../../shared/protocol.js';
 
@@ -101,7 +102,7 @@ export const lootMethods = {
 
   handlePickup(socketId, lootId) {
     const p = this.players.get(socketId);
-    if (!p || !p.alive || p.state !== 'ground') return;
+    if (!p || !p.alive || p.state !== PLAYER_STATE.GROUND) return;
     const item = this.loot.get(lootId);
     if (!item) return;
 

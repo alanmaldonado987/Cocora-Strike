@@ -2,7 +2,7 @@
 // Puertas y ventanas del mapa: estado, interacción, daño y serialización.
 // Métodos mezclados en GameRoom.prototype (usan `this` como la sala).
 
-import { BOT_AI_CONFIG } from '../../shared/mapData.js';
+import { BOT_AI_CONFIG, GAME_PHASE, PLAYER_STATE } from '../../shared/mapData.js';
 import { S2C } from '../../shared/protocol.js';
 
 const _doorSpatialQueryBuf = [];
@@ -70,9 +70,9 @@ export const interactablesMethods = {
   },
 
   handleInteractDoor(socketId, doorId) {
-    if (this.phase !== 'playing') return;
+    if (this.phase !== GAME_PHASE.PLAYING) return;
     const p = this.players.get(socketId);
-    if (!p || !p.alive || p.state !== 'ground') return;
+    if (!p || !p.alive || p.state !== PLAYER_STATE.GROUND) return;
     const door = this.doorsById.get(doorId);
     if (!door || door.destroyed) return;
     if (Math.hypot(door.x - p.x, door.z - p.z) > 3.8 || Math.abs(door.y - p.y) > 2.4) return;
@@ -91,7 +91,7 @@ export const interactablesMethods = {
   },
 
   handleBreakWindow(socketId, windowId) {
-    if (this.phase !== 'playing') return;
+    if (this.phase !== GAME_PHASE.PLAYING) return;
     const p = this.players.get(socketId);
     if (!p || !p.alive) return;
     const win = this.windowsById.get(windowId);

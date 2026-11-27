@@ -4,7 +4,9 @@
 
 import {
   STORM_PHASES,
-  STORM_CLOSED_DPS
+  STORM_CLOSED_DPS,
+  PLAYER_STATE,
+  STORM_STATE
 } from '../../shared/mapData.js';
 
 export const stormMethods = {
@@ -16,7 +18,7 @@ export const stormMethods = {
       startRadius: 365,
       targetRadius: STORM_PHASES[0].targetRadius,
       phaseIndex: 0,
-      state: 'waiting',
+      state: STORM_STATE.WAITING,
       timer: STORM_PHASES[0].waitSec,
       dps: STORM_PHASES[0].dps
     };
@@ -26,16 +28,16 @@ export const stormMethods = {
     const phaseCfg = STORM_PHASES[this.storm.phaseIndex];
 
     if (phaseCfg) {
-      if (this.storm.state === 'waiting') {
+      if (this.storm.state === STORM_STATE.WAITING) {
         this.storm.dps = phaseCfg.dps;
         this.storm.timer -= dt;
         if (this.storm.timer <= 0) {
-          this.storm.state = 'shrinking';
+          this.storm.state = STORM_STATE.SHRINKING;
           this.storm.startRadius = this.storm.radius;
           this.storm.targetRadius = phaseCfg.targetRadius;
           this.storm.timer = phaseCfg.shrinkSec;
         }
-      } else if (this.storm.state === 'shrinking') {
+      } else if (this.storm.state === STORM_STATE.SHRINKING) {
         this.storm.dps = phaseCfg.dps;
         this.storm.timer -= dt;
         const progress = Math.min(1, Math.max(0, 1 - this.storm.timer / phaseCfg.shrinkSec));
@@ -47,19 +49,19 @@ export const stormMethods = {
           this.storm.phaseIndex += 1;
           const nextCfg = STORM_PHASES[this.storm.phaseIndex];
           if (nextCfg) {
-            this.storm.state = 'waiting';
+            this.storm.state = STORM_STATE.WAITING;
             this.storm.timer = nextCfg.waitSec;
             this.storm.dps = nextCfg.dps;
             this.storm.targetRadius = nextCfg.targetRadius;
           } else {
-            this.storm.state = 'closed';
+            this.storm.state = STORM_STATE.CLOSED;
             this.storm.timer = 0;
             this.storm.dps = STORM_CLOSED_DPS;
           }
         }
       }
     } else {
-      this.storm.state = 'closed';
+      this.storm.state = STORM_STATE.CLOSED;
       this.storm.radius = 0;
       this.storm.dps = STORM_CLOSED_DPS;
     }
@@ -70,7 +72,7 @@ export const stormMethods = {
       const dmgPerSec = Math.max(1, Math.round(this.storm.dps));
 
       for (const p of this.players.values()) {
-        if (!p.alive || p.spectating || p.state === 'plane') continue;
+        if (!p.alive || p.spectating || p.state === PLAYER_STATE.PLANE) continue;
         const distFromSafeCenter = Math.hypot(p.x - this.storm.centerX, p.z - this.storm.centerZ);
         if (distFromSafeCenter > this.storm.radius) {
           this.damagePlayer(p, dmgPerSec, null, 'storm', false);

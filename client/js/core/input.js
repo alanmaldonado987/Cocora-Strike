@@ -4,7 +4,7 @@
 // Los botones discretos (salto, agacharse, deslizarse, paracaídas) se encolan en `queuedButtonsMask` y se consumen
 // en el siguiente paso fijo de simulación (SIM_DT) para que cliente y servidor vean la misma secuencia.
 
-import { PLAYER_INPUT_BUTTONS } from '/shared/mapData.js';
+import { PLAYER_INPUT_BUTTONS, PLAYER_STATE } from '/shared/mapData.js';
 
 // Solicita Pointer Lock sin aceleración del sistema operativo (unadjustedMovement) con fallback seguro
 export function requestRawPointerLock(element) {
@@ -45,7 +45,7 @@ export const inputMethods = {
       }
 
       if (e.code === 'Space' || e.code === 'KeyF') {
-        if (this.state === 'plane') {
+        if (this.state === PLAYER_STATE.PLANE) {
           this.startCabinDisembarkSequence();
         } else if (e.code === 'KeyF') {
           this.queuedButtonsMask |= PLAYER_INPUT_BUTTONS.PARACHUTE;
@@ -76,7 +76,7 @@ export const inputMethods = {
     window.addEventListener(
       'wheel',
       (e) => {
-        if (!this.active || !this.alive || this.state !== 'ground') return;
+        if (!this.active || !this.alive || this.state !== PLAYER_STATE.GROUND) return;
         this.cycleWeapon(e.deltaY > 0 ? 1 : -1);
       },
       { passive: true }

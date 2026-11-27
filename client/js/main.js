@@ -9,7 +9,8 @@ import {
   LOOT_TYPES,
   SWIM_CONFIG,
   CLIENT_PERF_CONFIG,
-  AUDIO_CONFIG
+  AUDIO_CONFIG,
+  PLAYER_STATE
 } from '/shared/mapData.js';
 import { SoundEngine } from './audio/audio.js';
 import { VoxelWorld } from './world/world.js';
@@ -122,7 +123,7 @@ const net = new NetworkManager(scene, {
     localPlayer.setEquippedWeaponVisual('fists', true);
     localPlayer.active = true;
     localPlayer.alive = true;
-    localPlayer.state = 'plane';
+    localPlayer.state = PLAYER_STATE.PLANE;
     localPlayer.hp = 100;
     localPlayer.breath = SWIM_CONFIG.maxBreath;
     localPlayer.isSwimming = false;
@@ -177,7 +178,7 @@ const net = new NetworkManager(scene, {
 
     localPlayer.active = true;
     localPlayer.alive = false;
-    localPlayer.state = 'spectating';
+    localPlayer.state = PLAYER_STATE.SPECTATING;
     localPlayer.x = 40;
     localPlayer.y = 52;
     localPlayer.z = 0;
@@ -220,10 +221,10 @@ const net = new NetworkManager(scene, {
         localPlayer.weapons.sniper.unlocked = Boolean(me.unlockedWeapons.sniper);
       }
 
-      if (localPlayer.state === 'plane' && me.state !== 'plane') {
+      if (localPlayer.state === PLAYER_STATE.PLANE && me.state !== PLAYER_STATE.PLANE) {
         localPlayer.resetPredictionBuffers?.();
         localPlayer.forceSyncExitFromServer(me);
-      } else if (localPlayer.state !== 'plane' && me.state !== 'plane') {
+      } else if (localPlayer.state !== PLAYER_STATE.PLANE && me.state !== PLAYER_STATE.PLANE) {
         localPlayer.reconcileWithServer?.(me, currentMap);
       }
     }
@@ -351,7 +352,7 @@ const net = new NetworkManager(scene, {
       localPlayer.isVaulting = false;
       localPlayer.cancelClientHeal(false);
       localPlayer.isCrouching = false;
-      localPlayer.state = 'dead';
+      localPlayer.state = PLAYER_STATE.DEAD;
       ui.sniperScopeOverlay?.classList.add('hidden');
       hud.showToast(`Fuiste eliminado por ${data.killerName}`);
     } else if (data.killerId === net.selfId) {
@@ -409,7 +410,7 @@ const net = new NetworkManager(scene, {
     localPlayer.endSlide();
     localPlayer.isVaulting = false;
     localPlayer.isCrouching = false;
-    localPlayer.state = 'lobby';
+    localPlayer.state = PLAYER_STATE.LOBBY;
     resetHudCache(hudCache);
     ui.sniperScopeOverlay?.classList.add('hidden');
     ui.hudScreen.classList.add('hidden');

@@ -17,7 +17,9 @@ import {
   PARACHUTE_CONFIG,
   PLAYER_INPUT_BUTTONS,
   MOVEMENT_CONFIG,
-  computeTargetDescentSpeed
+  computeTargetDescentSpeed,
+  MOVE_MODE,
+  PLAYER_STATE
 } from '../config.js';
 import {
   getWaterDepthAt,
@@ -90,8 +92,8 @@ export function createPlayerKinematicState(overrides = {}) {
     yaw: 0,
     pitch: 0,
     onGround: false,
-    state: 'ground',
-    moveMode: 'idle',
+    state: PLAYER_STATE.GROUND,
+    moveMode: MOVE_MODE.IDLE,
     walkPhase: 0,
     isCrouching: false,
     isSliding: false,
@@ -426,7 +428,7 @@ export function stepPlayer(state, input, dt, map, options = {}) {
   state.prevCrouchHeld = crouchHeld;
   state.prevSlideHeld = slideHeld;
 
-  if (state.state === 'plane' || state.state === 'lobby' || state.state === 'dead' || state.state === 'spectating') {
+  if (state.state === PLAYER_STATE.PLANE || state.state === PLAYER_STATE.LOBBY || state.state === PLAYER_STATE.DEAD || state.state === PLAYER_STATE.SPECTATING) {
     return ev;
   }
 
@@ -450,7 +452,7 @@ export function stepPlayer(state, input, dt, map, options = {}) {
   }
 
   // ==================== 1. CAÍDA LIBRE Y PARACAÍDAS ====================
-  if (state.state === 'skydiving' || state.state === 'parachuting') {
+  if (state.state === PLAYER_STATE.SKYDIVING || state.state === PLAYER_STATE.PARACHUTING) {
     if (state.isSliding) {
       state.isSliding = false;
       state.slideTimer = 0;
@@ -461,8 +463,8 @@ export function stepPlayer(state, input, dt, map, options = {}) {
     const floorY = map.getFloorBelowY(state.x, state.y, state.z);
     state.currentGroundClearance = Math.max(0, state.y - floorY);
 
-    if (state.state === 'skydiving' && parachutePressed && state.currentGroundClearance >= PARACHUTE_CONFIG.minClearanceToOpen) {
-      state.state = 'parachuting';
+    if (state.state === PLAYER_STATE.SKYDIVING && parachutePressed && state.currentGroundClearance >= PARACHUTE_CONFIG.minClearanceToOpen) {
+      state.state = PLAYER_STATE.PARACHUTING;
       state.airPeakY = state.y;
       ev.parachuteOpened = true;
     }
@@ -471,7 +473,7 @@ export function stepPlayer(state, input, dt, map, options = {}) {
     state.airMomentumZ = (state.airMomentumZ || 0) * Math.exp(-1.9 * dt);
 
     const hSpeed =
-      state.state === 'skydiving'
+      state.state === PLAYER_STATE.SKYDIVING
         ? PARACHUTE_CONFIG.freefallHorizontalSpeed
         : PARACHUTE_CONFIG.canopyHorizontalSpeed;
 
@@ -483,7 +485,7 @@ export function stepPlayer(state, input, dt, map, options = {}) {
     );
 
     let descent = state.currentDescentSpeed || PARACHUTE_CONFIG.freefallInitialSpeed;
-    if (state.state === 'parachuting' && descent > targetDescent) {
+    if (state.state === PLAYER_STATE.PARACHUTING && descent > targetDescent) {
       descent = Math.max(targetDescent, descent - PARACHUTE_CONFIG.canopyOpenDecel * dt);
     } else if (descent < targetDescent) {
       const ratio = descent / Math.max(1, targetDescent);
@@ -505,14 +507,14 @@ export function stepPlayer(state, input, dt, map, options = {}) {
     state.y += state.vy * dt;
     ev.movedHorizDist = Math.hypot(state.x - prevX, state.z - prevZ);
 
-    if (state.state === 'skydiving' && state.y - floorY <= PARACHUTE_CONFIG.autoDeployHeight) {
-      state.state = 'parachuting';
+    if (state.state === PLAYER_STATE.SKYDIVING && state.y - floorY <= PARACHUTE_CONFIG.autoDeployHeight) {
+      state.state = PLAYER_STATE.PARACHUTING;
       state.airPeakY = state.y;
       ev.parachuteOpened = true;
     }
 
-    const wasUnprotectedSkydive = state.state === 'skydiving';
-    const wasParachuting = state.state === 'parachuting';
+    const wasUnprotectedSkydive = state.state === PLAYER_STATE.SKYDIVING;
+    const wasParachuting = state.state === PLAYER_STATE.PARACHUTING;
     if (wasUnprotectedSkydive) {
       state.airPeakY = Math.max(state.airPeakY ?? state.y, state.y);
     } else {
@@ -540,8 +542,8 @@ export function stepPlayer(state, input, dt, map, options = {}) {
       state.airMomentumZ = 0;
       state.onGround = true;
       state.isSwimming = true;
-      state.state = 'ground';
-      state.moveMode = 'swim_idle';
+      state.state = PLAYER_STATE.GROUND;
+      state.moveMode = MOVE_MODE.SWIM_IDLE;
       state.airPeakY = state.y;
     } else if (state.y <= updatedFloorY + 0.12) {
       ev.landed = true;
@@ -558,11 +560,11 @@ export function stepPlayer(state, input, dt, map, options = {}) {
       state.airMomentumX = 0;
       state.airMomentumZ = 0;
       state.onGround = true;
-      state.state = 'ground';
+      state.state = PLAYER_STATE.GROUND;
       state.airPeakY = updatedFloorY;
-      state.moveMode = 'fall';
+      state.moveMode = MOVE_MODE.FALL;
     } else {
-      state.moveMode = 'fall';
+      state.moveMode = MOVE_MODE.FALL;
     }
 
     const minG = map.getTerrainHeightAt ? map.getTerrainHeightAt(state.x, state.z) : map.getGroundHeightAt(state.x, state.z, state.y);
@@ -620,9 +622,9 @@ export function stepPlayer(state, input, dt, map, options = {}) {
     ev.movedHorizDist = moved;
     if (moved > 0.004 * (dt / (1 / 60))) {
       state.walkPhase += dt * (sprinting ? 7.5 : 5.2);
-      state.moveMode = sprinting ? 'swim_fast' : 'swim';
+      state.moveMode = sprinting ? MOVE_MODE.SWIM_FAST : MOVE_MODE.SWIM;
     } else {
-      state.moveMode = 'swim_idle';
+      state.moveMode = MOVE_MODE.SWIM_IDLE;
     }
 
     const minG = map.getTerrainHeightAt ? map.getTerrainHeightAt(state.x, state.z) : map.getGroundHeightAt(state.x, state.z, state.y);
@@ -707,7 +709,7 @@ export function stepPlayer(state, input, dt, map, options = {}) {
       state.onGround = false;
       state.coyoteTimer = 0;
       state.jumpBufferTimer = 0;
-      state.moveMode = 'vault';
+      state.moveMode = MOVE_MODE.VAULT;
       ev.vaultStarted = true;
       ev.vaultBreakWindowId = vaultTarget.breakWindowId || null;
     } else {
@@ -734,7 +736,7 @@ export function stepPlayer(state, input, dt, map, options = {}) {
       const floorY = state.y - state.currentGroundClearance;
       state.jumpStartAltitude = Math.max(PARACHUTE_CONFIG.minJumpHeightRef, (state.airPeakY ?? state.y) - floorY);
       state.currentDescentSpeed = Math.max(4, -state.vy);
-      state.state = 'parachuting';
+      state.state = PLAYER_STATE.PARACHUTING;
       state.jumpBufferTimer = 0;
       state.airPeakY = state.y;
       ev.parachuteOpened = true;
@@ -755,7 +757,7 @@ export function stepPlayer(state, input, dt, map, options = {}) {
     state.vy = 0;
     state.vx = (state.x - prevX) / dt;
     state.vz = (state.z - prevZ) / dt;
-    state.moveMode = 'vault';
+    state.moveMode = MOVE_MODE.VAULT;
     ev.movedHorizDist = Math.hypot(state.x - prevX, state.z - prevZ);
     if (vt >= 1) {
       state.isVaulting = false;
@@ -828,12 +830,12 @@ export function stepPlayer(state, input, dt, map, options = {}) {
       state.isCrouching = true;
       ev.slideEnded = true;
       ev.slideEndedToCrouch = true;
-      state.moveMode = postSpeed > 0.25 ? 'crouch_walk' : 'crouch_idle';
+      state.moveMode = postSpeed > 0.25 ? MOVE_MODE.CROUCH_WALK : MOVE_MODE.CROUCH_IDLE;
       ev.movedHorizDist = Math.hypot(state.x - prevX, state.z - prevZ);
       return ev;
     }
 
-    state.moveMode = 'slide';
+    state.moveMode = MOVE_MODE.SLIDE;
     ev.movedHorizDist = Math.hypot(state.x - prevX, state.z - prevZ);
     return ev;
   }
@@ -879,7 +881,7 @@ export function stepPlayer(state, input, dt, map, options = {}) {
     } else {
       state.airPeakY = Math.max(state.airPeakY ?? state.y, state.y);
     }
-    state.moveMode = state.vy > 0.6 ? 'jump' : 'fall';
+    state.moveMode = state.vy > 0.6 ? MOVE_MODE.JUMP : MOVE_MODE.FALL;
   } else {
     state.coyoteTimer = MOVEMENT_CONFIG.coyoteTimeSec;
     if (!wasOnGround) {
@@ -897,14 +899,14 @@ export function stepPlayer(state, input, dt, map, options = {}) {
       state.coyoteTimer = 0;
       state.jumpBufferTimer = 0;
       ev.jumped = true;
-      state.moveMode = 'jump';
+      state.moveMode = MOVE_MODE.JUMP;
     } else if (horizSpeed > 0.25 && moved > 0.002 * (dt / (1 / 60))) {
       const speedRatio = Math.min(1.35, horizSpeed / Math.max(1, baseSpeed));
       const baseFreq = sprinting ? 13 : state.isCrouching ? 7 : 9.5;
       state.walkPhase += dt * baseFreq * Math.max(0.45, speedRatio);
-      state.moveMode = sprinting && horizSpeed > 6.2 ? 'sprint' : state.isCrouching ? 'crouch_walk' : 'walk';
+      state.moveMode = sprinting && horizSpeed > 6.2 ? MOVE_MODE.SPRINT : state.isCrouching ? MOVE_MODE.CROUCH_WALK : MOVE_MODE.WALK;
     } else {
-      state.moveMode = state.isCrouching ? 'crouch_idle' : 'idle';
+      state.moveMode = state.isCrouching ? MOVE_MODE.CROUCH_IDLE : MOVE_MODE.IDLE;
     }
   }
 

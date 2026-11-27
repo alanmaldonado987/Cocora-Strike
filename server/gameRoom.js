@@ -17,7 +17,10 @@ import {
   SWIM_CONFIG,
   BOT_AI_CONFIG,
   generateCocoraMap,
-  applyEntitySeparation
+  applyEntitySeparation,
+  GAME_PHASE,
+  MOVE_MODE,
+  PLAYER_STATE
 } from '../shared/mapData.js';
 import { TICK_RATE, TICK_DT } from './room/constants.js';
 import { lobbyMethods } from './room/lobby.js';
@@ -35,7 +38,7 @@ import { S2C, quantize } from '../shared/protocol.js';
 export class GameRoom {
   constructor(io) {
     this.io = io;
-    this.phase = 'lobby';
+    this.phase = GAME_PHASE.LOBBY;
     this.seed = DEFAULT_MAP_SEED;
     this.map = generateCocoraMap(this.seed);
 
@@ -98,7 +101,7 @@ export class GameRoom {
       drownDamageAccum: 0,
       kills: 0,
       placement: 0,
-      state: 'lobby',
+      state: PLAYER_STATE.LOBBY,
       x: 0,
       y: 20,
       z: 0,
@@ -113,7 +116,7 @@ export class GameRoom {
       isVaulting: false,
       animWalk: 0,
       walkPhase: 0,
-      moveMode: 'idle',
+      moveMode: MOVE_MODE.IDLE,
       jumpAltitude: PARACHUTE_CONFIG.planeHeightAboveValley,
       jumpStartAltitude: PARACHUTE_CONFIG.planeHeightAboveValley,
       currentDescentSpeed: 0,
@@ -165,7 +168,7 @@ export class GameRoom {
   tick() {
     const now = Date.now();
 
-    if (this.phase === 'lobby') {
+    if (this.phase === GAME_PHASE.LOBBY) {
       if (this.lobbyCountdown !== null) {
         const prevCeil = Math.ceil(this.lobbyCountdown);
         this.lobbyCountdown -= TICK_DT;
@@ -179,7 +182,7 @@ export class GameRoom {
       return;
     }
 
-    if (this.phase !== 'playing') return;
+    if (this.phase !== GAME_PHASE.PLAYING) return;
 
     if (this.plane && this.plane.active) {
       this.plane.elapsed += TICK_DT;
@@ -187,7 +190,7 @@ export class GameRoom {
       this.plane.z += this.plane.vz * TICK_DT;
 
       for (const p of this.players.values()) {
-        if (p.alive && p.state === 'plane') {
+        if (p.alive && p.state === PLAYER_STATE.PLANE) {
           p.x = this.plane.x;
           p.y = this.plane.y;
           p.z = this.plane.z;
@@ -195,7 +198,7 @@ export class GameRoom {
           if (p.cabinDisembarkStartAt > 0) {
             const prog = Math.min(1, (now - p.cabinDisembarkStartAt) / CABIN_DISEMBARK_MS);
             p.cabinProgress = prog;
-            p.moveMode = prog < 0.24 ? 'stand' : prog < 0.82 ? 'walk_cabin' : 'ramp_jump';
+            p.moveMode = prog < 0.24 ? MOVE_MODE.STAND : prog < 0.82 ? MOVE_MODE.WALK_CABIN : MOVE_MODE.RAMP_JUMP;
             if (prog >= 1) {
               this.completePlaneExit(p);
             }
@@ -205,7 +208,7 @@ export class GameRoom {
 
       if (this.plane.elapsed >= this.plane.maxDuration) {
         for (const p of this.players.values()) {
-          if (p.alive && p.state === 'plane') {
+          if (p.alive && p.state === PLAYER_STATE.PLANE) {
             this.completePlaneExit(p);
           }
         }
@@ -262,7 +265,7 @@ export class GameRoom {
         }
       }
 
-      if (p.state === 'ground') {
+      if (p.state === PLAYER_STATE.GROUND) {
         for (const item of this.loot.values()) {
           const spec = LOOT_TYPES[item.type] || LOOT_TYPES.ammo;
           // Auto-recolección de munición y consumibles al pasar cerca (y armas para Bots o si el jugador solo lleva machete)
@@ -275,11 +278,11 @@ export class GameRoom {
 
     if (p.isBot) {
       this.updateBot(p, TICK_DT, now, allParticipants);
-    } else if (p.state === 'ground') {
+    } else if (p.state === PLAYER_STATE.GROUND) {
         applyEntitySeparation(p, allParticipants, PLAYER_RADIUS, TICK_DT, this.map);
       }
 
-      if (p.state !== 'plane') {
+      if (p.state !== PLAYER_STATE.PLANE) {
         const minGround = this.map.getTerrainHeightAt
           ? this.map.getTerrainHeightAt(p.x, p.z)
           : this.map.getGroundHeightAt(p.x, p.z, p.y);
@@ -344,7 +347,7 @@ export class GameRoom {
         pitch: quantize(p.pitch, 3),
         onGround: Boolean(p.onGround),
         animWalk: quantize(p.animWalk, 2),
-        moveMode: p.moveMode || 'idle',
+        moveMode: p.moveMode || MOVE_MODE.IDLE,
         isSliding: Boolean(p.isSliding),
         isCrouching: Boolean(p.isCrouching),
         jumpAltitude: quantize(p.jumpAltitude || PARACHUTE_CONFIG.planeHeightAboveValley, 1),

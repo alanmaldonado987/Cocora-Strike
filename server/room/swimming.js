@@ -4,12 +4,18 @@
 // y pierde vida cada segundo hasta salir del río.
 // Métodos mezclados en GameRoom.prototype (usan `this` como la sala).
 
-import { SWIM_CONFIG, isSwimmingAt, getSwimFloatY } from '../../shared/mapData.js';
+import {
+  SWIM_CONFIG,
+  isSwimmingAt,
+  getSwimFloatY,
+  MOVE_MODE,
+  PLAYER_STATE
+} from '../../shared/mapData.js';
 
 export const swimmingMethods = {
   // Llamar una vez por tick para cada participante vivo
   updateSwimmingAndBreath(p, dt) {
-    if (p.state !== 'ground') {
+    if (p.state !== PLAYER_STATE.GROUND) {
       p.isSwimming = false;
     } else if (p.isBot) {
       // Los humanos informan su posición y el servidor la valida en handlePlayerInput;
@@ -22,13 +28,13 @@ export const swimmingMethods = {
         p.fallPeakY = p.y;
         p.isCrouching = false;
         p.isSliding = false;
-        const moving = p.moveMode === 'walk' || p.moveMode === 'sprint' || p.moveMode === 'swim' || p.moveMode === 'swim_fast';
-        p.moveMode = moving ? (p.moveMode === 'sprint' ? 'swim_fast' : 'swim') : 'swim_idle';
+        const moving = p.moveMode === MOVE_MODE.WALK || p.moveMode === MOVE_MODE.SPRINT || p.moveMode === MOVE_MODE.SWIM || p.moveMode === MOVE_MODE.SWIM_FAST;
+        p.moveMode = moving ? (p.moveMode === MOVE_MODE.SPRINT ? MOVE_MODE.SWIM_FAST : MOVE_MODE.SWIM) : MOVE_MODE.SWIM_IDLE;
       }
     }
 
     if (p.isSwimming) {
-      const drain = p.moveMode === 'swim_fast' ? SWIM_CONFIG.sprintDrainPerSec : SWIM_CONFIG.drainPerSec;
+      const drain = p.moveMode === MOVE_MODE.SWIM_FAST ? SWIM_CONFIG.sprintDrainPerSec : SWIM_CONFIG.drainPerSec;
       p.breath = Math.max(0, p.breath - drain * dt);
     } else {
       p.breath = Math.min(SWIM_CONFIG.maxBreath, p.breath + SWIM_CONFIG.regenPerSec * dt);

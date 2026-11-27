@@ -3,7 +3,7 @@
 // renderViewmodel se mezcla en LocalPlayerController.prototype.
 
 import * as THREE from 'three';
-import { damp } from '/shared/mapData.js';
+import { damp, PLAYER_STATE } from '/shared/mapData.js';
 import { applyActiveWeaponVisibility } from './avatarPerf.js';
 import { createDetailedWeaponMesh } from './weapons.js';
 
@@ -158,7 +158,7 @@ export class FirstPersonWeaponRig {
   update(dt, info) {
     // Ocultar modelo 3D cuando está en mira telescópica completa de francotirador
     const sniperScoped = this.currentWeapon === 'sniper' && info.aimingZoom && !info.reloading;
-    this.pivot.visible = info.visible && info.state === 'ground' && !sniperScoped;
+    this.pivot.visible = info.visible && info.state === PLAYER_STATE.GROUND && !sniperScoped;
     if (!this.pivot.visible) {
       this.flashLight.intensity = 0;
       return;
@@ -273,7 +273,7 @@ export class FirstPersonWeaponRig {
 export const viewmodelMethods = {
   renderViewmodel(renderer) {
     // Nadando el arma va guardada: no se dibuja en primera persona
-    if (this.cameraMode === 'first' && this.state !== 'plane' && !this.isSwimming) {
+    if (this.cameraMode === 'first' && this.state !== PLAYER_STATE.PLANE && !this.isSwimming) {
       this.fpRig.render(renderer);
     }
   }

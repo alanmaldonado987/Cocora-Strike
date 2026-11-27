@@ -2,7 +2,7 @@
 // Validación de los mensajes que llegan del cliente y límite de frecuencia por socket.
 // Cada sanitizador devuelve un payload limpio o null si el mensaje debe descartarse.
 
-import { BOT_DIFFICULTIES, TRANSPORT_AIRCRAFT_TYPES, WEAPONS } from '../shared/mapData.js';
+import { BOT_DIFFICULTIES, PLAYER_STATE, TRANSPORT_AIRCRAFT_TYPES, WEAPONS } from '../shared/mapData.js';
 import { C2S } from '../shared/protocol.js';
 
 const MAX_ID_LENGTH = 64;
@@ -55,7 +55,13 @@ function botConfig(p) {
   return out;
 }
 
-const INPUT_STATES = new Set(['ground', 'skydiving', 'parachuting', 'plane', 'swimming']);
+const INPUT_STATES = new Set([
+  PLAYER_STATE.GROUND,
+  PLAYER_STATE.SKYDIVING,
+  PLAYER_STATE.PARACHUTING,
+  PLAYER_STATE.PLANE,
+  PLAYER_STATE.SWIMMING
+]);
 
 export const sanitizers = {
   [C2S.JOIN_LOBBY]: (p) => ({ name: sanitizeName(isObject(p) ? p.name : '') }),

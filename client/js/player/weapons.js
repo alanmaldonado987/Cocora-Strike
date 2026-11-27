@@ -13,7 +13,8 @@ import {
   PLAYER_CROUCH_EYE_HEIGHT,
   PLAYER_SLIDE_EYE_HEIGHT,
   stepFireAccumulator,
-  raycastVoxels
+  raycastVoxels,
+  PLAYER_STATE
 } from '/shared/mapData.js';
 
 const _fireCamDir = new THREE.Vector3();
@@ -178,7 +179,7 @@ export const weaponMethods = {
     const wState = this.weapons[this.equipped];
     const canShootNow =
       this.alive &&
-      this.state === 'ground' &&
+      this.state === PLAYER_STATE.GROUND &&
       !this.reloading &&
       !this.isSwimming &&
       Boolean(mapData) &&
@@ -287,6 +288,6 @@ export const weaponMethods = {
   },
 
   isSniperScoped() {
-    return this.alive && this.state === 'ground' && this.equipped === 'sniper' && this.aimingZoom && !this.reloading;
+    return this.alive && this.state === PLAYER_STATE.GROUND && this.equipped === 'sniper' && this.aimingZoom && !this.reloading;
   }
 };

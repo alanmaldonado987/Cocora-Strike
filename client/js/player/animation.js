@@ -5,7 +5,13 @@
 
 import * as THREE from 'three';
 import { solveArmIK } from '/Modelos%203D/cocoraModels.js';
-import { ANIMATION_FEEL_CONFIG, stepPoseWeights, damp } from '/shared/mapData.js';
+import {
+  ANIMATION_FEEL_CONFIG,
+  stepPoseWeights,
+  damp,
+  MOVE_MODE,
+  PLAYER_STATE
+} from '/shared/mapData.js';
 
 // Vectores temporales reutilizables para la IK de brazos (CERO asignaciones por fotograma)
 const _ikTargetWorld = new THREE.Vector3();
@@ -46,7 +52,7 @@ export function createAvatarAnimator(rig) {
     state,
     equipped,
     pitch = 0,
-    moveMode = 'idle',
+    moveMode = MOVE_MODE.IDLE,
     dt = 0.016,
     isSliding = false,
     isCrouching = false,
@@ -55,8 +61,8 @@ export function createAvatarAnimator(rig) {
   ) {
     st.breathClock += dt * 2.3;
     st.recoilAmount = damp(st.recoilAmount, 0, 16, dt);
-    parachute.visible = state === 'parachuting';
-    const activeHeal = Boolean(isHealing && state === 'ground' && !isSliding);
+    parachute.visible = state === PLAYER_STATE.PARACHUTING;
+    const activeHeal = Boolean(isHealing && state === PLAYER_STATE.GROUND && !isSliding);
     healProp.visible = activeHeal;
     weaponMount.visible = !activeHeal && !st.hideWeaponInAds && st.lastAlpha > 0.25;
 
@@ -89,15 +95,15 @@ export function createAvatarAnimator(rig) {
     // Nado ("swimming" / swim / swim_fast / swim_idle): crol fluido con brazadas alternas, pataleo con tobillo
     // extendido y flotabilidad horizontal; o pataleo vertical suave al mantenerse en el sitio. El arma va guardada.
     const isSwimPose =
-      state === 'swimming' ||
-      moveMode === 'swimming' ||
-      moveMode === 'swim' ||
-      moveMode === 'swim_fast' ||
-      moveMode === 'swim_idle';
+      state === PLAYER_STATE.SWIMMING ||
+      moveMode === MOVE_MODE.SWIMMING ||
+      moveMode === MOVE_MODE.SWIM ||
+      moveMode === MOVE_MODE.SWIM_FAST ||
+      moveMode === MOVE_MODE.SWIM_IDLE;
 
     if (isSwimPose) {
       weaponMount.visible = false;
-      const moving = moveMode !== 'swim_idle';
+      const moving = moveMode !== MOVE_MODE.SWIM_IDLE;
       const stroke = walkPhase;
       pelvisGroup.position.y = damp(pelvisGroup.position.y, moving ? 1.02 : 0.90, 8, dt);
       pelvisGroup.rotation.set(
@@ -144,8 +150,8 @@ export function createAvatarAnimator(rig) {
       return;
     }
 
-    if (state === 'plane') {
-      if (moveMode === 'stand') {
+    if (state === PLAYER_STATE.PLANE) {
+      if (moveMode === MOVE_MODE.STAND) {
         // 1. Levantarse suavemente desde el banco lateral de la bodega (~0.35s)
         const u = Math.max(0, Math.min(1, walkPhase / 1.6));
         pelvisGroup.position.y = damp(pelvisGroup.position.y, 0.50 + u * 0.46, 14, dt);
@@ -172,7 +178,7 @@ export function createAvatarAnimator(rig) {
         return;
       }
 
-      if (moveMode === 'walk_cabin') {
+      if (moveMode === MOVE_MODE.WALK_CABIN) {
         // 2. Avanzar por el pasillo central antideslizante hacia el borde de la rampa trasera abierta
         const sPhi = Math.sin(walkPhase);
         const cPhi = Math.cos(walkPhase);
@@ -203,7 +209,7 @@ export function createAvatarAnimator(rig) {
         return;
       }
 
-      if (moveMode === 'ramp_jump') {
+      if (moveMode === MOVE_MODE.RAMP_JUMP) {
         // 3. Salto atlético desde el labio de la rampa hacia el vacío antes de desacoplarse a skydiving
         pelvisGroup.position.y = damp(pelvisGroup.position.y, 0.92, 18, dt);
         pelvisGroup.rotation.set(damp(pelvisGroup.rotation.x, 0.48, 18, dt), 0, 0);
@@ -229,7 +235,7 @@ export function createAvatarAnimator(rig) {
       }
     }
 
-    if (state === 'plane' || moveMode === 'seated') {
+    if (state === PLAYER_STATE.PLANE || moveMode === MOVE_MODE.SEATED) {
       const turb = Math.sin(st.breathClock * 1.4) * 0.035;
       pelvisGroup.position.y = damp(pelvisGroup.position.y, 0.50, speed, dt);
       pelvisGroup.rotation.set(damp(pelvisGroup.rotation.x, 0, speed, dt), 0, 0);
@@ -256,7 +262,7 @@ export function createAvatarAnimator(rig) {
       return;
     }
 
-    if (state === 'skydiving') {
+    if (state === PLAYER_STATE.SKYDIVING) {
       // Animación v2 ('fall'): caída libre en arco de paracaidista con aleteo independiente de ruanaF y ruanaB
       const t = st.breathClock * 0.44;
       const flutter = Math.sin(st.breathClock * 8) * 0.075;
@@ -284,7 +290,7 @@ export function createAvatarAnimator(rig) {
       return;
     }
 
-    if (state === 'parachuting') {
+    if (state === PLAYER_STATE.PARACHUTING) {
       // Animación v2 ('parachute'): manos en las bandas resueltas con IK analítico de 2 huesos (solveArmIK)
       const sway = Math.sin(st.breathClock * 1.3) * 0.05;
       pelvisGroup.position.y = damp(pelvisGroup.position.y, 0.88, speed, dt);
@@ -320,7 +326,7 @@ export function createAvatarAnimator(rig) {
       damp(pelvisGroup.rotation.z || 0, 0, speed, dt)
     );
 
-    if (moveMode === 'vault') {
+    if (moveMode === MOVE_MODE.VAULT) {
       // Animación v2 ('vault'): pierna derecha flexionada sobre el obstáculo, pierna izquierda impulsando,
       // torso inclinado lateralmente y mano izquierda apoyada al frente mediante IK de 2 huesos.
       pelvisGroup.position.y = damp(pelvisGroup.position.y, 0.92, 18, dt);
@@ -358,12 +364,12 @@ export function createAvatarAnimator(rig) {
     }
 
     // Mezcla continua de poses por pesos (blending: idle, walk, sprint, crouch, slide y salto/caída)
-    const isJump = moveMode === 'jump';
-    const isFall = moveMode === 'fall';
+    const isJump = moveMode === MOVE_MODE.JUMP;
+    const isFall = moveMode === MOVE_MODE.FALL;
     const isAir = isJump || isFall;
-    const isSlideNow = Boolean(isSliding || moveMode === 'slide');
-    const isSprint = moveMode === 'sprint';
-    const isWalk = moveMode === 'walk' || isSprint || moveMode === 'crouch_walk';
+    const isSlideNow = Boolean(isSliding || moveMode === MOVE_MODE.SLIDE);
+    const isSprint = moveMode === MOVE_MODE.SPRINT;
+    const isWalk = moveMode === MOVE_MODE.WALK || isSprint || moveMode === MOVE_MODE.CROUCH_WALK;
 
     const w = stepPoseWeights(
       st.poseWeights,
@@ -389,12 +395,12 @@ export function createAvatarAnimator(rig) {
     const sw = Math.sin(st.breathClock * 0.35);
     const sPhi = Math.sin(walkPhase);
     const cPhi = Math.cos(walkPhase);
-    const locoWeight = w.walk + w.sprint + w.crouch * (moveMode === 'crouch_walk' || (horizSpeed || 0) > 0.25 ? 1 : 0);
+    const locoWeight = w.walk + w.sprint + w.crouch * (moveMode === MOVE_MODE.CROUCH_WALK || (horizSpeed || 0) > 0.25 ? 1 : 0);
     const runFactor = w.sprint;
 
     const strideAmp = activeHeal
       ? 0.28 * locoWeight
-      : w.walk * 0.44 + w.sprint * 0.78 + w.crouch * (moveMode === 'crouch_walk' || (horizSpeed || 0) > 0.25 ? 0.40 : 0);
+      : w.walk * 0.44 + w.sprint * 0.78 + w.crouch * (moveMode === MOVE_MODE.CROUCH_WALK || (horizSpeed || 0) > 0.25 ? 0.40 : 0);
     const thL = -strideAmp * sPhi;
     const thR = strideAmp * sPhi;
 
@@ -606,8 +612,8 @@ export function createAvatarAnimator(rig) {
       solveArmIK(leftArm.shoulder, leftArm.elbow, _ikTargetTorso, _ikPoleL, 0.28, 0.31);
     } else {
       const armSwing =
-        moveMode === 'walk' || moveMode === 'sprint'
-          ? Math.sin(walkPhase) * (moveMode === 'sprint' ? 0.8 : 0.48)
+        moveMode === MOVE_MODE.WALK || moveMode === MOVE_MODE.SPRINT
+          ? Math.sin(walkPhase) * (moveMode === MOVE_MODE.SPRINT ? 0.8 : 0.48)
           : Math.sin(st.breathClock) * 0.04;
       const slash = st.recoilAmount * 1.35;
       rightArm.shoulder.rotation.set(
@@ -617,7 +623,7 @@ export function createAvatarAnimator(rig) {
       );
       rightArm.elbow.rotation.set(damp(rightArm.elbow.rotation.x, -0.55 + slash * 0.4, 16, dt), 0, 0);
       leftArm.shoulder.rotation.set(damp(leftArm.shoulder.rotation.x, -armSwing, 16, dt), 0, 0.06);
-      leftArm.elbow.rotation.set(damp(leftArm.elbow.rotation.x, moveMode === 'sprint' ? -0.85 : -0.32, 16, dt), 0, 0);
+      leftArm.elbow.rotation.set(damp(leftArm.elbow.rotation.x, moveMode === MOVE_MODE.SPRINT ? -0.85 : -0.32, 16, dt), 0, 0);
     }
 
     headPivot.rotation.set(damp(headPivot.rotation.x, -pitch * 0.58 - st.recoilAmount * 0.03, 16, dt), 0, 0);

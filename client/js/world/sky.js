@@ -3,7 +3,7 @@
 // cilindro de tormenta y transición de niebla/cielo (andina, tormenta púrpura, incendio del helicóptero).
 
 import * as THREE from 'three';
-import { createRNG, damp } from '/shared/mapData.js';
+import { createRNG, damp, PLAYER_STATE } from '/shared/mapData.js';
 import { getSharedToonGradient } from '../player/avatar.js';
 import {
   _tmpVecA,
@@ -269,7 +269,7 @@ export const skyMethods = {
     let targetCrashFactor = 0;
     const hw = this.mapData?.helicopterWreck;
 
-    if (viewerPos && viewerPos.active && viewerPos.state !== 'plane') {
+    if (viewerPos && viewerPos.active && viewerPos.state !== PLAYER_STATE.PLANE) {
       if (stormState) {
         const distCenter = Math.hypot(viewerPos.x - stormState.centerX, viewerPos.z - stormState.centerZ);
         const distToEdge = stormState.radius - distCenter;

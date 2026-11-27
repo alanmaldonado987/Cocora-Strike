@@ -5,7 +5,12 @@
 // - Liberación completa de memoria WebGL (avatar.dispose) al desconectarse o reiniciar partida
 // - Soporte para animación canalizada de curación (2.0s) con partículas verdes ascendentes
 
-import { CABIN_DISEMBARK_MS, ANIMATION_FEEL_CONFIG } from '/shared/mapData.js';
+import {
+  CABIN_DISEMBARK_MS,
+  ANIMATION_FEEL_CONFIG,
+  MOVE_MODE,
+  PLAYER_STATE
+} from '/shared/mapData.js';
 import { createVoxelAvatar } from '../player/avatar.js';
 import { ServerClock, SnapshotBuffer, createSampleOut } from './interpolation.js';
 import { C2S, S2C } from '/shared/protocol.js';
@@ -196,7 +201,7 @@ export class NetworkManager {
           animWalk: pData.animWalk || 0,
           localWalkPhase: pData.animWalk || 0,
           horizSpeed: 0,
-          moveMode: pData.moveMode || 'idle',
+          moveMode: pData.moveMode || MOVE_MODE.IDLE,
           isSliding: Boolean(pData.isSliding),
           isCrouching: Boolean(pData.isCrouching),
           isSwimming: Boolean(pData.isSwimming),
@@ -207,7 +212,7 @@ export class NetworkManager {
           state: pData.state,
           equipped: pData.equipped,
           alive: pData.alive,
-          entityProxy: { x: pData.x, y: pData.y, z: pData.z, alive: true, state: 'ground' }
+          entityProxy: { x: pData.x, y: pData.y, z: pData.z, alive: true, state: PLAYER_STATE.GROUND }
         };
         this.remotePlayers.set(id, entry);
       } else {
@@ -232,7 +237,7 @@ export class NetworkManager {
     if (!data) return;
     entry.pitch = data.pitch || 0;
     entry.animWalk = data.animWalk || 0;
-    entry.moveMode = data.moveMode || 'idle';
+    entry.moveMode = data.moveMode || MOVE_MODE.IDLE;
     entry.isSliding = Boolean(data.isSliding);
     entry.isCrouching = Boolean(data.isCrouching);
     entry.isSwimming = Boolean(data.isSwimming);
@@ -250,12 +255,12 @@ export class NetworkManager {
       const hasSample = entry.buffer.sample(renderTime, _sample);
       if (hasSample) this.applySampledPose(entry, _sample.data);
 
-      if (!entry.alive || entry.state === 'lobby') {
+      if (!entry.alive || entry.state === PLAYER_STATE.LOBBY) {
         entry.avatar.root.visible = false;
         continue;
       }
 
-      if (entry.state === 'plane') {
+      if (entry.state === PLAYER_STATE.PLANE) {
         if (planeState && planeState.active && worldInstance) {
           const bayGroup = worldInstance.getActiveCabinBayGroup();
           if (bayGroup && entry.avatar.root.parent !== bayGroup) {
@@ -317,19 +322,19 @@ export class NetworkManager {
       entry.avatar.setWeapon(entry.equipped);
 
       let effectiveMode =
-        entry.isSwimming && entry.moveMode !== 'swim' && entry.moveMode !== 'swim_fast' && entry.moveMode !== 'swim_idle'
-          ? 'swim'
+        entry.isSwimming && entry.moveMode !== MOVE_MODE.SWIM && entry.moveMode !== MOVE_MODE.SWIM_FAST && entry.moveMode !== MOVE_MODE.SWIM_IDLE
+          ? MOVE_MODE.SWIM
           : entry.moveMode;
 
-      if (hasSample && entry.state === 'ground' && !entry.isSwimming && !entry.isSliding && effectiveMode !== 'vault') {
+      if (hasSample && entry.state === PLAYER_STATE.GROUND && !entry.isSwimming && !entry.isSliding && effectiveMode !== MOVE_MODE.VAULT) {
         if (Math.abs(sampleVy) > 2.4 && _sample.data?.onGround === false) {
-          effectiveMode = sampleVy > 0.5 ? 'jump' : 'fall';
+          effectiveMode = sampleVy > 0.5 ? MOVE_MODE.JUMP : MOVE_MODE.FALL;
         } else if (horizSpeed >= ANIMATION_FEEL_CONFIG.sprintWeightThreshold) {
-          effectiveMode = entry.isCrouching ? 'crouch_walk' : 'sprint';
+          effectiveMode = entry.isCrouching ? MOVE_MODE.CROUCH_WALK : MOVE_MODE.SPRINT;
         } else if (horizSpeed >= ANIMATION_FEEL_CONFIG.minMoveSpeedForWalk) {
-          effectiveMode = entry.isCrouching ? 'crouch_walk' : 'walk';
-        } else if (horizSpeed < 0.12 && (effectiveMode === 'walk' || effectiveMode === 'sprint' || effectiveMode === 'crouch_walk')) {
-          effectiveMode = entry.isCrouching ? 'crouch_idle' : 'idle';
+          effectiveMode = entry.isCrouching ? MOVE_MODE.CROUCH_WALK : MOVE_MODE.WALK;
+        } else if (horizSpeed < 0.12 && (effectiveMode === MOVE_MODE.WALK || effectiveMode === MOVE_MODE.SPRINT || effectiveMode === MOVE_MODE.CROUCH_WALK)) {
+          effectiveMode = entry.isCrouching ? MOVE_MODE.CROUCH_IDLE : MOVE_MODE.IDLE;
         }
       }
 
@@ -337,11 +342,11 @@ export class NetworkManager {
       let animPhaseToRender = entry.animWalk;
       if (hasSample) {
         const stepRate =
-          effectiveMode === 'swim' || effectiveMode === 'swim_fast'
-            ? (effectiveMode === 'swim_fast' ? 7.5 : 5.2)
-            : effectiveMode === 'sprint'
+          effectiveMode === MOVE_MODE.SWIM || effectiveMode === MOVE_MODE.SWIM_FAST
+            ? (effectiveMode === MOVE_MODE.SWIM_FAST ? 7.5 : 5.2)
+            : effectiveMode === MOVE_MODE.SPRINT
             ? 13.0 * Math.max(0.65, Math.min(1.25, horizSpeed / 8.2))
-            : effectiveMode === 'crouch_walk'
+            : effectiveMode === MOVE_MODE.CROUCH_WALK
             ? 7.0 * Math.max(0.55, Math.min(1.25, horizSpeed / 3.4))
             : horizSpeed >= ANIMATION_FEEL_CONFIG.minMoveSpeedForWalk
             ? 9.5 * Math.max(0.50, Math.min(1.25, horizSpeed / 5.5))
@@ -368,8 +373,8 @@ export class NetworkManager {
         horizSpeed
       );
 
-      if ((entry.isSwimming || effectiveMode === 'swim' || effectiveMode === 'swim_fast' || effectiveMode === 'swim_idle') && worldInstance) {
-        const swimMoving = effectiveMode === 'swim' || effectiveMode === 'swim_fast';
+      if ((entry.isSwimming || effectiveMode === MOVE_MODE.SWIM || effectiveMode === MOVE_MODE.SWIM_FAST || effectiveMode === MOVE_MODE.SWIM_IDLE) && worldInstance) {
+        const swimMoving = effectiveMode === MOVE_MODE.SWIM || effectiveMode === MOVE_MODE.SWIM_FAST;
         entry.waterRippleAccum += dt;
         if (entry.waterRippleAccum >= (swimMoving ? 0.14 : 0.34)) {
           entry.waterRippleAccum = 0;
@@ -413,7 +418,7 @@ export class NetworkManager {
   getRemoteEntityList() {
     this._remoteEntityBuffer.length = 0;
     for (const entry of this.remotePlayers.values()) {
-      if (entry.alive && entry.state === 'ground') {
+      if (entry.alive && entry.state === PLAYER_STATE.GROUND) {
         entry.entityProxy.x = entry.avatar.root.position.x;
         entry.entityProxy.y = entry.avatar.root.position.y;
         entry.entityProxy.z = entry.avatar.root.position.z;
@@ -439,7 +444,7 @@ export class NetworkManager {
     if (!localPlayer.active || !localPlayer.alive) return;
 
     const steps = localPlayer.flushPendingNetworkSteps?.();
-    if (localPlayer.state !== 'plane' && (!steps || steps.length === 0)) return;
+    if (localPlayer.state !== PLAYER_STATE.PLANE && (!steps || steps.length === 0)) return;
 
     this.socket.emit(C2S.PLAYER_INPUT, {
       yaw: localPlayer.yaw,

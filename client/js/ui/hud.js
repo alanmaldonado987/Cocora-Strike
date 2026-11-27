@@ -11,7 +11,9 @@ import {
   PLAYER_CROUCH_EYE_HEIGHT,
   PLAYER_SLIDE_EYE_HEIGHT,
   SWIM_CONFIG,
-  CLIENT_PERF_CONFIG
+  CLIENT_PERF_CONFIG,
+  PLAYER_STATE,
+  STORM_STATE
 } from '/shared/mapData.js';
 import {
   setTextIfChanged,
@@ -181,7 +183,7 @@ export function createHud({ ui, localPlayer, camera, world, hudCache, hudSensorS
     }
 
     // Consultas contextuales pesadas (isConcealedInBush + findBestInteractable) limitadas a máximo 10 Hz
-    const canSenseGround = Boolean(localPlayer.alive && localPlayer.state === 'ground');
+    const canSenseGround = Boolean(localPlayer.alive && localPlayer.state === PLAYER_STATE.GROUND);
     if (stepHudSensorThrottle(hudSensorState, dt, canSenseGround)) {
       hudSensorState.concealed = Boolean(
         currentMap &&
@@ -309,7 +311,7 @@ export function createHud({ ui, localPlayer, camera, world, hudCache, hudSensorS
 
     if (ui.crosshair) {
       setDatasetIfChanged(hudCache, 'chWeapon', ui.crosshair, 'weapon', wKey);
-      const adsStr = localPlayer.aimingZoom && localPlayer.state === 'ground' ? 'true' : 'false';
+      const adsStr = localPlayer.aimingZoom && localPlayer.state === PLAYER_STATE.GROUND ? 'true' : 'false';
       setDatasetIfChanged(hudCache, 'chAds', ui.crosshair, 'ads', adsStr);
       setStyleIfChanged(hudCache, 'chOpacity', ui.crosshair, 'opacity', sniperScoped ? '0' : '1');
     }
@@ -322,7 +324,7 @@ export function createHud({ ui, localPlayer, camera, world, hudCache, hudSensorS
         '💀 ELIMINADO — Observando el desenlace en el Valle del Cocora...'
       );
       toggleClassIfChanged(hudCache, 'actionBannerHidden', ui.actionBanner, 'hidden', false);
-    } else if (localPlayer.state === 'plane') {
+    } else if (localPlayer.state === PLAYER_STATE.PLANE) {
       const alt = Math.round(localPlayer.currentGroundClearance);
       const rawLabel = planeState?.label || 'AC-130J Ghostrider';
       const disembark = Boolean(localPlayer.isCabinDisembarking);
@@ -343,7 +345,7 @@ export function createHud({ ui, localPlayer, camera, world, hudCache, hudSensorS
         setTextIfChanged(hudCache, 'actionBannerText', ui.actionBanner, text);
       }
       toggleClassIfChanged(hudCache, 'actionBannerHidden', ui.actionBanner, 'hidden', false);
-    } else if (localPlayer.state === 'skydiving') {
+    } else if (localPlayer.state === PLAYER_STATE.SKYDIVING) {
       const alt = Math.round(localPlayer.currentGroundClearance);
       const spdTenths = Math.round(localPlayer.currentDescentSpeed * 10);
       if (hudCache.bannerMode !== 'skydiving' || hudCache.bannerAlt !== alt || hudCache.bannerSpd !== spdTenths) {
@@ -359,7 +361,7 @@ export function createHud({ ui, localPlayer, camera, world, hudCache, hudSensorS
         );
       }
       toggleClassIfChanged(hudCache, 'actionBannerHidden', ui.actionBanner, 'hidden', false);
-    } else if (localPlayer.state === 'parachuting') {
+    } else if (localPlayer.state === PLAYER_STATE.PARACHUTING) {
       const alt = Math.round(localPlayer.currentGroundClearance);
       const spdTenths = Math.round(localPlayer.currentDescentSpeed * 10);
       if (hudCache.bannerMode !== 'parachuting' || hudCache.bannerAlt !== alt || hudCache.bannerSpd !== spdTenths) {
@@ -393,9 +395,9 @@ export function createHud({ ui, localPlayer, camera, world, hudCache, hudSensorS
         hudCache.stormState = stMode;
         hudCache.stormPhase = phaseIdx;
         const label =
-          stMode === 'shrinking'
+          stMode === STORM_STATE.SHRINKING
             ? `⚡ Cerrando F${phaseIdx}`
-            : stMode === 'closed'
+            : stMode === STORM_STATE.CLOSED
             ? `⚡ Zona Cerrada`
             : `Zona · Fase ${phaseIdx}`;
         setTextIfChanged(hudCache, 'stormPhaseText', ui.stormPhaseText, label);
@@ -414,7 +416,7 @@ export function createHud({ ui, localPlayer, camera, world, hudCache, hudSensorS
         localPlayer.z - stormState.centerZ
       );
       const outside = Boolean(
-        localPlayer.alive && localPlayer.state !== 'plane' && distCenter > stormState.radius
+        localPlayer.alive && localPlayer.state !== PLAYER_STATE.PLANE && distCenter > stormState.radius
       );
       if (outside && hudCache.stormWarnDps !== dpsVal) {
         hudCache.stormWarnDps = dpsVal;

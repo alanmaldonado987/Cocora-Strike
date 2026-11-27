@@ -18,7 +18,9 @@ import {
   stepRecoilSpring,
   applyEntitySeparation,
   createStepEvents,
-  stepPlayer
+  stepPlayer,
+  MOVE_MODE,
+  PLAYER_STATE
 } from '/shared/mapData.js';
 import { inputMethods } from '../core/input.js';
 import { mixMethods } from '../core/mixin.js';
@@ -54,7 +56,7 @@ export class LocalPlayerController {
 
     this.active = false;
     this.alive = true;
-    this.state = 'lobby';
+    this.state = PLAYER_STATE.LOBBY;
 
     this.x = 0;
     this.y = 30;
@@ -67,7 +69,7 @@ export class LocalPlayerController {
     this.onGround = false;
     this.walkPhase = 0;
     this.stepAccum = 0;
-    this.moveMode = 'idle';
+    this.moveMode = MOVE_MODE.IDLE;
 
     this.simAccum = 0;
     this.inputSeq = 0;
@@ -200,7 +202,7 @@ export class LocalPlayerController {
   }
 
   tryRequestHeal(preferredType = 'medkit') {
-    if (!this.alive || this.state !== 'ground' || !this.onGround || this.hp >= 100 || this.isHealing) return;
+    if (!this.alive || this.state !== PLAYER_STATE.GROUND || !this.onGround || this.hp >= 100 || this.isHealing) return;
     if (this.isSwimming) return; // no se puede vendar nadando
     if (this.medkits <= 0 && this.bandages <= 0) return;
     this.endSlide();
@@ -234,7 +236,7 @@ export class LocalPlayerController {
   }
 
   startCabinDisembarkSequence() {
-    if (this.state !== 'plane' || this.isCabinDisembarking) return;
+    if (this.state !== PLAYER_STATE.PLANE || this.isCabinDisembarking) return;
     this.isCabinDisembarking = true;
     this.cabinDisembarkTimer = 0;
     this.onJumpRequest?.();
@@ -263,8 +265,8 @@ export class LocalPlayerController {
     this.currentDescentSpeed = PARACHUTE_CONFIG.freefallInitialSpeed;
     this.isCabinDisembarking = false;
     this.cabinDisembarkTimer = 0;
-    this.state = 'skydiving';
-    this.moveMode = 'fall';
+    this.state = PLAYER_STATE.SKYDIVING;
+    this.moveMode = MOVE_MODE.FALL;
     this.onGround = false;
     this.cameraInitializedOnFoot = true;
   }
@@ -294,7 +296,7 @@ export class LocalPlayerController {
     if (!this.active) {
       if (this.avatar) this.avatar.root.visible = false;
       this.fpCanopy.visible = false;
-      this.fpRig.update(dt, { visible: false, state: 'lobby' });
+      this.fpRig.update(dt, { visible: false, state: PLAYER_STATE.LOBBY });
       const t = performance.now() * 0.00012;
       this.camera.position.set(Math.cos(t) * 145 + 35, 58, Math.sin(t) * 145);
       this.camera.lookAt(45, 10, 6);
@@ -329,7 +331,7 @@ export class LocalPlayerController {
       const wLen = Math.hypot(wishX, wishZ);
       if (wLen > 0) { wishX /= wLen; wishZ /= wLen; }
 
-      if (this.state === 'plane' && planeState && worldInstance) {
+      if (this.state === PLAYER_STATE.PLANE && planeState && worldInstance) {
         if (this.isCabinDisembarking) {
           this.cabinDisembarkTimer += dt;
           if (this.cabinDisembarkTimer >= this.cabinDisembarkDuration) {
@@ -337,7 +339,7 @@ export class LocalPlayerController {
           }
         }
 
-        if (this.state === 'plane') {
+        if (this.state === PLAYER_STATE.PLANE) {
           const normProg = this.isCabinDisembarking
             ? Math.min(1, this.cabinDisembarkTimer / Math.max(0.1, this.cabinDisembarkDuration))
             : 0;
@@ -366,7 +368,7 @@ export class LocalPlayerController {
           const groundBelow = mapData.getFloorBelowY(this.x, this.y, this.z);
           this.currentGroundClearance = Math.max(0, this.y - groundBelow);
           this.jumpStartAltitude = Math.max(15, this.currentGroundClearance);
-          this.moveMode = localPose.phase === 'sit' ? 'seated' : localPose.phase;
+          this.moveMode = localPose.phase === 'sit' ? MOVE_MODE.SEATED : localPose.phase;
           this.walkPhase = localPose.walkCycle;
 
           if (this.avatar) {
@@ -404,7 +406,7 @@ export class LocalPlayerController {
             eventsOut: this._stepEvents
           });
 
-          if (this.state === 'ground' && !this.isVaulting && remoteEntities.length > 0) {
+          if (this.state === PLAYER_STATE.GROUND && !this.isVaulting && remoteEntities.length > 0) {
             applyEntitySeparation(this, remoteEntities, PLAYER_RADIUS, SIM_DT, mapData);
           }
 
@@ -459,7 +461,7 @@ export class LocalPlayerController {
               }
             }
             this.swimRippleAccum = (this.swimRippleAccum || 0) + SIM_DT;
-            const swimMoving = this.moveMode === 'swim' || this.moveMode === 'swim_fast';
+            const swimMoving = this.moveMode === MOVE_MODE.SWIM || this.moveMode === MOVE_MODE.SWIM_FAST;
             if (this.swimRippleAccum >= (swimMoving ? 0.13 : 0.32)) {
               this.swimRippleAccum = 0;
               this.onSpawnWaterRipples?.(this.x, this.z, swimMoving, sprinting ? 1.15 : 0.85);
@@ -478,7 +480,7 @@ export class LocalPlayerController {
             }
           }
 
-          if (this.isHealing && this.state === 'ground') {
+          if (this.isHealing && this.state === PLAYER_STATE.GROUND) {
             this.healParticleAccum += SIM_DT;
             if (this.healParticleAccum >= 0.085) {
               this.healParticleAccum = 0;
@@ -501,7 +503,7 @@ export class LocalPlayerController {
     const renderZ = this.z + this.reconcileOffsetZ;
 
     const sniperAds = this.isSniperScoped();
-    if (this.avatar && this.state !== 'plane') {
+    if (this.avatar && this.state !== PLAYER_STATE.PLANE) {
       this.ensureAvatarInWorldScene();
       const camCloseFade =
         this.cameraMode === 'third'
@@ -533,7 +535,7 @@ export class LocalPlayerController {
       }
     }
 
-    this.fpCanopy.visible = this.alive && this.cameraMode === 'first' && this.state === 'parachuting';
+    this.fpCanopy.visible = this.alive && this.cameraMode === 'first' && this.state === PLAYER_STATE.PARACHUTING;
     if (this.fpCanopy.visible) {
       this.fpCanopy.position.set(this.x, this.y + 2.85, this.z);
       this.fpCanopy.rotation.y = this.yaw;

@@ -7,7 +7,10 @@ import {
   PLAYER_RADIUS,
   WILDLIFE_TYPES,
   stepCharacterPhysics,
-  hasLineOfSight
+  hasLineOfSight,
+  GAME_PHASE,
+  PLAYER_STATE,
+  WILDLIFE_STATE
 } from '../../shared/mapData.js';
 import { normalizeAngle } from './constants.js';
 import { S2C, quantize } from '../../shared/protocol.js';
@@ -35,7 +38,7 @@ export const wildlifeMethods = {
         vy: 0,
         onGround: sp.species !== 'condor',
         yaw: rng() * Math.PI * 2,
-        aiState: 'peaceful',
+        aiState: WILDLIFE_STATE.PEACEFUL,
         pose: sp.species === 'condor' ? 'soar' : 'wander',
         animPhase: rng() * 6.28,
         homeX: sp.x,
@@ -58,7 +61,7 @@ export const wildlifeMethods = {
   },
 
   damageWildlife(animal, amount, attacker, hitPoint) {
-    if (!animal.alive || this.phase !== 'playing') return;
+    if (!animal.alive || this.phase !== GAME_PHASE.PLAYING) return;
     const now = Date.now();
     const spec = WILDLIFE_TYPES[animal.species];
     animal.hp = Math.max(0, animal.hp - amount);
@@ -89,8 +92,8 @@ export const wildlifeMethods = {
     }
 
     if (spec?.behavior === 'predator' && attacker) {
-      const wasHostile = animal.aiState === 'hostile';
-      animal.aiState = 'hostile';
+      const wasHostile = animal.aiState === WILDLIFE_STATE.HOSTILE;
+      animal.aiState = WILDLIFE_STATE.HOSTILE;
       animal.pose = 'run';
       animal.targetId = attacker.id;
       animal.hostileUntil = now + 18000;
@@ -106,7 +109,7 @@ export const wildlifeMethods = {
         });
       }
     } else if (spec?.behavior === 'timid' && attacker) {
-      animal.aiState = 'fleeing';
+      animal.aiState = WILDLIFE_STATE.FLEEING;
       animal.pose = 'run';
       animal.fleeFromX = attacker.x;
       animal.fleeFromZ = attacker.z;
@@ -135,10 +138,10 @@ export const wildlifeMethods = {
         continue;
       }
 
-      if (animal.aiState === 'hostile') {
+      if (animal.aiState === WILDLIFE_STATE.HOSTILE) {
         const target = animal.targetId ? this.players.get(animal.targetId) : null;
-        if (!target || !target.alive || target.state !== 'ground' || now > animal.hostileUntil) {
-          animal.aiState = 'peaceful';
+        if (!target || !target.alive || target.state !== PLAYER_STATE.GROUND || now > animal.hostileUntil) {
+          animal.aiState = WILDLIFE_STATE.PEACEFUL;
           animal.pose = 'wander';
           animal.targetId = null;
         } else {
@@ -213,9 +216,9 @@ export const wildlifeMethods = {
         }
       }
 
-      if (animal.aiState === 'fleeing') {
+      if (animal.aiState === WILDLIFE_STATE.FLEEING) {
         if (now > animal.fleeUntil) {
-          animal.aiState = 'peaceful';
+          animal.aiState = WILDLIFE_STATE.PEACEFUL;
           animal.pose = 'wander';
         } else {
           const steered = this.steerWithWhiskers(

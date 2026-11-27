@@ -25,7 +25,10 @@ import {
   getSwimFloatY,
   isSwimmingAt,
   createStepEvents,
-  stepPlayer
+  stepPlayer,
+  GAME_PHASE,
+  MOVE_MODE,
+  PLAYER_STATE
 } from '../../shared/mapData.js';
 import { consumeMoveBudget } from '../validation.js';
 import { S2C } from '../../shared/protocol.js';
@@ -34,49 +37,49 @@ const _serverStepEvents = createStepEvents();
 
 export const playerActionsMethods = {
   handlePlayerJump(socketId) {
-    if (this.phase !== 'playing') return;
+    if (this.phase !== GAME_PHASE.PLAYING) return;
     const p = this.players.get(socketId);
     if (!p || !p.alive) return;
 
     const floorY = this.map.getFloorBelowY(p.x, p.y, p.z);
     const clearance = Math.max(0, p.y - floorY);
 
-    if (p.state === 'plane' && this.plane) {
+    if (p.state === PLAYER_STATE.PLANE && this.plane) {
       if (p.cabinDisembarkStartAt > 0) return;
       p.cabinDisembarkStartAt = Date.now();
       p.cabinProgress = 0.01;
-      p.moveMode = 'stand';
+      p.moveMode = MOVE_MODE.STAND;
       this.io.emit(S2C.PLAYER_CABIN_DISEMBARK, {
         playerId: p.id,
         seatIndex: p.seatIndex || 0,
         durationMs: CABIN_DISEMBARK_MS
       });
-    } else if (p.state === 'skydiving' && clearance >= PARACHUTE_CONFIG.minClearanceToOpen) {
-      p.state = 'parachuting';
+    } else if (p.state === PLAYER_STATE.SKYDIVING && clearance >= PARACHUTE_CONFIG.minClearanceToOpen) {
+      p.state = PLAYER_STATE.PARACHUTING;
       p.fallPeakY = p.y;
       p.vy = -computeTargetDescentSpeed(p.jumpAltitude, 'parachuting', p.pitch);
-      this.io.emit(S2C.PLAYER_JUMPED, { playerId: p.id, state: 'parachuting' });
-    } else if (p.state === 'ground' && clearance >= PARACHUTE_CONFIG.minClearanceToOpen) {
+      this.io.emit(S2C.PLAYER_JUMPED, { playerId: p.id, state: PLAYER_STATE.PARACHUTING });
+    } else if (p.state === PLAYER_STATE.GROUND && clearance >= PARACHUTE_CONFIG.minClearanceToOpen) {
       p.jumpAltitude = Math.max(PARACHUTE_CONFIG.minJumpHeightRef, clearance);
-      p.state = 'parachuting';
+      p.state = PLAYER_STATE.PARACHUTING;
       p.isSliding = false;
       p.isCrouching = false;
       p.onGround = false;
       p.fallPeakY = p.y;
       p.vy = -computeTargetDescentSpeed(p.jumpAltitude, 'parachuting', p.pitch);
-      this.io.emit(S2C.PLAYER_JUMPED, { playerId: p.id, state: 'parachuting' });
+      this.io.emit(S2C.PLAYER_JUMPED, { playerId: p.id, state: PLAYER_STATE.PARACHUTING });
     }
   },
 
   completePlaneExit(p) {
-    if (!p || !p.alive || p.state !== 'plane' || !this.plane) return;
+    if (!p || !p.alive || p.state !== PLAYER_STATE.PLANE || !this.plane) return;
     const backDist = this.plane.aircraftType === 'ch47' ? 7.95 : 7.75;
     const backX = -Math.sin(this.plane.yaw) * backDist;
     const backZ = -Math.cos(this.plane.yaw) * backDist;
     p.cabinDisembarkStartAt = 0;
     p.cabinProgress = 1;
-    p.state = 'skydiving';
-    p.moveMode = 'fall';
+    p.state = PLAYER_STATE.SKYDIVING;
+    p.moveMode = MOVE_MODE.FALL;
     p.isSliding = false;
     p.isCrouching = false;
     p.onGround = false;
@@ -94,7 +97,7 @@ export const playerActionsMethods = {
     p.vy = -PARACHUTE_CONFIG.freefallInitialSpeed;
     this.io.emit(S2C.PLAYER_JUMPED, {
       playerId: p.id,
-      state: 'skydiving',
+      state: PLAYER_STATE.SKYDIVING,
       jumpAltitude: p.jumpAltitude,
       x: p.x,
       y: p.y,
@@ -103,9 +106,9 @@ export const playerActionsMethods = {
   },
 
   handlePlayerSlide(socketId, payload = {}) {
-    if (this.phase !== 'playing') return;
+    if (this.phase !== GAME_PHASE.PLAYING) return;
     const p = this.players.get(socketId);
-    if (!p || !p.alive || p.state !== 'ground') return;
+    if (!p || !p.alive || p.state !== PLAYER_STATE.GROUND) return;
     p.isSliding = Boolean(payload.active);
     if (p.isSliding) {
       p.isCrouching = false;
@@ -126,7 +129,7 @@ export const playerActionsMethods = {
   },
 
   handlePlayerInput(socketId, data) {
-    if (this.phase !== 'playing') return;
+    if (this.phase !== GAME_PHASE.PLAYING) return;
     const p = this.players.get(socketId);
     if (!p || !p.alive || p.isBot) return;
 
@@ -134,14 +137,14 @@ export const playerActionsMethods = {
     if (typeof data.pitch === 'number' && Number.isFinite(data.pitch)) {
       p.pitch = Math.max(-1.45, Math.min(1.45, data.pitch));
     }
-    if (p.state === 'plane') return;
+    if (p.state === PLAYER_STATE.PLANE) return;
 
     // Simulación cinemática compartida paso a paso (stepPlayer idéntico en cliente y servidor)
     if (Array.isArray(data.steps) && data.steps.length > 0) {
       const now = Date.now();
       for (let i = 0; i < data.steps.length; i++) {
         const cmd = data.steps[i];
-        if (!p.alive || p.state === 'plane') break;
+        if (!p.alive || p.state === PLAYER_STATE.PLANE) break;
         if (cmd.seq <= (p.lastProcessedSeq || 0)) continue;
         p.lastProcessedSeq = cmd.seq;
         p.isHealing = p.healingUntil > now;
@@ -160,7 +163,7 @@ export const playerActionsMethods = {
           this.io.emit(S2C.PLAYER_SLID, { playerId: p.id, x: p.x, y: p.y, z: p.z, yaw: p.yaw });
         }
         if (ev.parachuteOpened) {
-          this.io.emit(S2C.PLAYER_JUMPED, { playerId: p.id, state: 'parachuting' });
+          this.io.emit(S2C.PLAYER_JUMPED, { playerId: p.id, state: PLAYER_STATE.PARACHUTING });
         }
         if (ev.vaultBreakWindowId) {
           this.handleBreakWindow(socketId, ev.vaultBreakWindowId);
@@ -178,16 +181,16 @@ export const playerActionsMethods = {
 
     if (typeof data.animWalk === 'number' && Number.isFinite(data.animWalk)) p.animWalk = data.animWalk;
     if (typeof data.moveMode === 'string') p.moveMode = data.moveMode;
-    if (typeof data.isSliding === 'boolean') p.isSliding = p.state === 'ground' ? data.isSliding : false;
-    if (typeof data.isCrouching === 'boolean') p.isCrouching = p.state === 'ground' && !p.isSliding ? data.isCrouching : false;
+    if (typeof data.isSliding === 'boolean') p.isSliding = p.state === PLAYER_STATE.GROUND ? data.isSliding : false;
+    if (typeof data.isCrouching === 'boolean') p.isCrouching = p.state === PLAYER_STATE.GROUND && !p.isSliding ? data.isCrouching : false;
 
     // Si corre rápido (sprint), derrapa o salta, cancelar curación canalizada de 2.0s
-    if (p.healingUntil > 0 && (p.moveMode === 'sprint' || p.isSliding || data.onGround === false)) {
+    if (p.healingUntil > 0 && (p.moveMode === MOVE_MODE.SPRINT || p.isSliding || data.onGround === false)) {
       this.cancelHealForPlayer(p);
     }
 
-    if ((p.state === 'skydiving' || p.state === 'ground') && data.state === 'parachuting') {
-      p.state = 'parachuting';
+    if ((p.state === PLAYER_STATE.SKYDIVING || p.state === PLAYER_STATE.GROUND) && data.state === PLAYER_STATE.PARACHUTING) {
+      p.state = PLAYER_STATE.PARACHUTING;
       p.isSliding = false;
       p.isCrouching = false;
       p.fallPeakY = p.y;
@@ -202,7 +205,7 @@ export const playerActionsMethods = {
       const clampedY = Math.max(0.4, Math.min(280, data.y));
 
       const horizDist = Math.hypot(clampedX - p.x, clampedZ - p.z);
-      const isVaulting = p.moveMode === 'vault' || Boolean(data.isVaulting);
+      const isVaulting = p.moveMode === MOVE_MODE.VAULT || Boolean(data.isVaulting);
       if (horizDist < 16.0) {
         // Limitar la velocidad: el servidor avanza como máximo lo que el presupuesto de movimiento permite
         const allowed = consumeMoveBudget(p, p.state, horizDist);
@@ -231,24 +234,24 @@ export const playerActionsMethods = {
       const floorY = this.map.getFloorBelowY(p.x, p.y + 0.5, p.z);
       const nearFloor = p.y - floorY <= 0.25;
 
-      if (p.state === 'skydiving' || p.state === 'parachuting') {
-        if (p.state === 'skydiving' && p.y - floorY <= PARACHUTE_CONFIG.autoDeployHeight) {
-          p.state = 'parachuting';
+      if (p.state === PLAYER_STATE.SKYDIVING || p.state === PLAYER_STATE.PARACHUTING) {
+        if (p.state === PLAYER_STATE.SKYDIVING && p.y - floorY <= PARACHUTE_CONFIG.autoDeployHeight) {
+          p.state = PLAYER_STATE.PARACHUTING;
           p.fallPeakY = p.y;
         }
 
-        const wasUnprotectedSkydive = p.state === 'skydiving';
+        const wasUnprotectedSkydive = p.state === PLAYER_STATE.SKYDIVING;
         if (wasUnprotectedSkydive) p.fallPeakY = Math.max(p.fallPeakY, p.y);
         else p.fallPeakY = p.y;
 
         const waterDepthHere = getWaterDepthAt(this.map, p.x, p.z);
         const landedInDeepWater = waterDepthHere > SWIM_CONFIG.swimDepth && p.y <= WATER_LEVEL + 0.35;
 
-        if (landedInDeepWater || nearFloor || ((data.state === 'ground' || data.state === 'swimming') && p.y - floorY <= 2.8)) {
+        if (landedInDeepWater || nearFloor || ((data.state === PLAYER_STATE.GROUND || data.state === PLAYER_STATE.SWIMMING) && p.y - floorY <= 2.8)) {
           const landingY = landedInDeepWater ? getSwimFloatY(this.map, p.x, p.z) : floorY;
           const fallDist = p.fallPeakY - landingY;
           p.y = landingY;
-          p.state = 'ground';
+          p.state = PLAYER_STATE.GROUND;
           p.isSwimming = landedInDeepWater || isSwimmingAt(this.map, p.x, p.y, p.z);
           p.onGround = true;
           p.vy = 0;
@@ -260,7 +263,7 @@ export const playerActionsMethods = {
             if (fallDmg > 0) this.damagePlayer(p, fallDmg, null, 'fall', false);
           }
         }
-      } else if (p.state === 'ground') {
+      } else if (p.state === PLAYER_STATE.GROUND) {
         const clientAirborne = data.onGround === false || !nearFloor;
         const swimming = isSwimmingAt(this.map, p.x, p.y, p.z);
         p.isSwimming = swimming;
@@ -303,7 +306,7 @@ export const playerActionsMethods = {
 
   handleReload(socketId) {
     const p = this.players.get(socketId);
-    if (!p || !p.alive || p.state !== 'ground') return;
+    if (!p || !p.alive || p.state !== PLAYER_STATE.GROUND) return;
     this.startReloadForPlayer(p);
   },
 
@@ -335,7 +338,7 @@ export const playerActionsMethods = {
 
   handleHeal(socketId, preferredItem = 'medkit') {
     const p = this.players.get(socketId);
-    if (!p || !p.alive || p.state !== 'ground' || p.hp >= p.maxHp) return;
+    if (!p || !p.alive || p.state !== PLAYER_STATE.GROUND || p.hp >= p.maxHp) return;
     if (p.isSwimming) return; // no se puede vendar nadando
     const now = Date.now();
     if (p.healingUntil > now) return;

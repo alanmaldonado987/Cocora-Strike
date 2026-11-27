@@ -7,7 +7,8 @@ import {
   WATER_LEVEL,
   SWIM_CONFIG,
   PLAYER_RADIUS,
-  PLAYER_HEIGHT
+  PLAYER_HEIGHT,
+  PLAYER_STATE
 } from '../config.js';
 
 export function getWaterDepthAt(map, x, z) {
@@ -93,7 +94,7 @@ export function resolveSlidingHorizontal(map, x, y, z, radius = PLAYER_RADIUS, h
 export function applyEntitySeparation(entity, others, selfRadius = PLAYER_RADIUS, dt = 0.04, map = null) {
   for (const other of others) {
     if (!other || other === entity || other.alive === false) continue;
-    if (other.state === 'plane' || other.state === 'lobby' || other.spectating) continue;
+    if (other.state === PLAYER_STATE.PLANE || other.state === PLAYER_STATE.LOBBY || other.spectating) continue;
     if (Math.abs((entity.y || 0) - (other.y || 0)) > 1.8) continue;
 
     const otherR = other.radius || PLAYER_RADIUS;

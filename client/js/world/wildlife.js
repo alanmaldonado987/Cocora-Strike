@@ -4,7 +4,7 @@
 
 import * as THREE from 'three';
 import { populateExternalBearModel, populateExternalCondorModel, populateExternalTapirModel } from '/Modelos%203D/cocoraModels.js';
-import { damp } from '/shared/mapData.js';
+import { damp, WILDLIFE_STATE } from '/shared/mapData.js';
 import { SnapshotBuffer, createSampleOut } from '../net/interpolation.js';
 import { getSharedToonGradient } from '../player/avatar.js';
 
@@ -196,12 +196,12 @@ export const wildlifeMethods = {
         const model = createWildlifeModel(data.species);
         model.root.position.set(data.x, data.y, data.z);
         model.root.rotation.set(0, data.yaw, 0);
-        model.hpBarSprite.userData.updateBar(data.hp, data.maxHp, data.aiState === 'hostile');
+        model.hpBarSprite.userData.updateBar(data.hp, data.maxHp, data.aiState === WILDLIFE_STATE.HOSTILE);
         this.wildlifeGroup.add(model.root);
         entry = {
           model,
           buffer: new SnapshotBuffer(),
-          barKey: `${data.hp}|${data.maxHp}|${data.aiState === 'hostile'}`,
+          barKey: `${data.hp}|${data.maxHp}|${data.aiState === WILDLIFE_STATE.HOSTILE}`,
           hp: data.hp,
           maxHp: data.maxHp,
           aiState: data.aiState,
@@ -219,10 +219,10 @@ export const wildlifeMethods = {
         entry.pose = data.pose;
         if (entry.localPhase === undefined) entry.localPhase = data.animPhase || 0;
         // Redibujar la barra de vida (canvas + subida de textura) solo si cambió
-        const barKey = `${data.hp}|${data.maxHp}|${data.aiState === 'hostile'}`;
+        const barKey = `${data.hp}|${data.maxHp}|${data.aiState === WILDLIFE_STATE.HOSTILE}`;
         if (barKey !== entry.barKey) {
           entry.barKey = barKey;
-          entry.model.hpBarSprite.userData.updateBar(data.hp, data.maxHp, data.aiState === 'hostile');
+          entry.model.hpBarSprite.userData.updateBar(data.hp, data.maxHp, data.aiState === WILDLIFE_STATE.HOSTILE);
         }
       }
       if (!hasTime) entry.buffer.clear();
@@ -236,7 +236,7 @@ export const wildlifeMethods = {
     entry.flashTimer = 0.15;
     if (typeof hp === 'number') {
       entry.hp = hp;
-      entry.model.hpBarSprite.userData.updateBar(hp, maxHp || entry.maxHp, entry.aiState === 'hostile');
+      entry.model.hpBarSprite.userData.updateBar(hp, maxHp || entry.maxHp, entry.aiState === WILDLIFE_STATE.HOSTILE);
     }
   },
 
@@ -265,7 +265,7 @@ export const wildlifeMethods = {
         if (m.root.position.y < minG) m.root.position.y = minG;
       }
 
-      m.alertSprite.visible = entry.aiState === 'hostile';
+      m.alertSprite.visible = entry.aiState === WILDLIFE_STATE.HOSTILE;
 
       if (entry.flashTimer > 0) {
         entry.flashTimer -= dt;

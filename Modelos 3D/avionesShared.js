@@ -1348,3 +1348,64 @@ export function bakeRigidAircraftBatches(root, dynamicObjects = []) {
     if (obj.isMesh && obj.material && !Array.isArray(obj.material)) registerSharedAircraftMat(obj.material);
   });
 }
+
+// ---------------------------------------------------------------------------------------------
+// Controles articulados compartidos (Bloque 6A): setThrottle / setDoorsOpen / aimTurrets / setFiring.
+// Cada campo en `null` significa "modo demostración autónomo" (barridos y ráfagas procedurales),
+// de modo que el avión de transporte sigue animándose solo si el juego no le da órdenes.
+// ---------------------------------------------------------------------------------------------
+
+export function createAircraftControls() {
+  return {
+    throttle: null, // 0..1 o null (automático)
+    doorsOpen: null, // true/false o null (sigue rampTarget interno)
+    hasAim: false,
+    aimTarget: new THREE.Vector3(), // punto del mundo al que apuntan los afustes
+    firing: null // true/false o null (ráfagas de demostración)
+  };
+}
+
+/** Añade al rig los métodos públicos de control sobre un objeto `controls` de createAircraftControls(). */
+export function attachAircraftControlApi(rig, controls) {
+  rig.controls = controls;
+  rig.setThrottle = (v) => {
+    controls.throttle = v === null || v === undefined ? null : clamp(Number(v) || 0, 0, 1);
+  };
+  rig.setDoorsOpen = (open) => {
+    controls.doorsOpen = open === null || open === undefined ? null : Boolean(open);
+  };
+  rig.aimTurrets = (worldTarget) => {
+    if (!worldTarget) {
+      controls.hasAim = false;
+      return;
+    }
+    controls.aimTarget.set(worldTarget.x, worldTarget.y, worldTarget.z);
+    controls.hasAim = true;
+  };
+  rig.setFiring = (on) => {
+    controls.firing = on === null || on === undefined ? null : Boolean(on);
+  };
+  return rig;
+}
+
+const _aimLocal = new THREE.Vector3();
+
+/**
+ * Resuelve el pan/tilt de un afuste (grupo `pan` con hijo `tilt`, cañón hacia +Z local) para apuntar a un
+ * punto del mundo, limitado a su arco de tiro para que el cañón nunca atraviese el marco de la ventana.
+ * Devuelve false si el objetivo es degenerado; en `out` deja { pan, tilt }. Sin asignaciones por fotograma.
+ */
+export function solveMountAim(pan, worldTarget, panCenter, panRange, tiltMin, tiltMax, out) {
+  const parent = pan.parent;
+  if (!parent) return false;
+  _aimLocal.copy(worldTarget);
+  parent.worldToLocal(_aimLocal).sub(pan.position);
+  const horiz = Math.hypot(_aimLocal.x, _aimLocal.z);
+  if (horiz + Math.abs(_aimLocal.y) < 1e-5) return false;
+  let d = Math.atan2(_aimLocal.x, _aimLocal.z) - panCenter;
+  d = Math.atan2(Math.sin(d), Math.cos(d)); // envolver a [-π, π]
+  out.pan = panCenter + clamp(d, -panRange, panRange);
+  // Rotación +X lleva +Z hacia -Y: tilt positivo = cañón hacia abajo
+  out.tilt = clamp(Math.atan2(-_aimLocal.y, horiz), tiltMin, tiltMax);
+  return true;
+}

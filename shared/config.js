@@ -525,3 +525,13 @@ export const BOT_AI_CONFIG = {
   doorSenseVertical: 1.6      // Diferencia máxima de cota (m) para interactuar con una puerta
 };
 
+export const AUDIO_CONFIG = {
+  maxVoices: 24,              // Límite estricto de voces simultáneas (roba la más lejana/antigua)
+  musicStepDurationSec: 0.26, // Duración exacta de cada paso musical ambiental (s)
+  lookaheadIntervalMs: 40,    // Frecuencia del reloj supervisor JS del planificador lookahead (ms)
+  scheduleAheadTimeSec: 0.12, // Ventana de pre-programación sobre AudioContext.currentTime (s)
+  noiseBufferDurationSec: 1.6,// Duración del buffer compartido de ruido blanco (s)
+  spatialNearRefDist: 1.8,    // Distancia de referencia cercana para suavizar el paneo lateral (m)
+  maxPanAbs: 0.94             // Amplitud máxima de paneo estéreo [-0.94, +0.94]
+};
+

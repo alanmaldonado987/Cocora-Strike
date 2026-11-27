@@ -17,7 +17,8 @@ import {
   PLAYER_CROUCH_EYE_HEIGHT,
   PLAYER_SLIDE_EYE_HEIGHT,
   SWIM_CONFIG,
-  CLIENT_PERF_CONFIG
+  CLIENT_PERF_CONFIG,
+  AUDIO_CONFIG
 } from '/shared/mapData.js';
 import { SoundEngine } from './audio.js';
 import { VoxelWorld } from './world.js';
@@ -63,7 +64,7 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 container.appendChild(renderer.domElement);
 
-const audio = new SoundEngine();
+const audio = new SoundEngine(AUDIO_CONFIG);
 await preloadExternalModelAssets();
 const world = new VoxelWorld(scene);
 let currentMap = world.buildFromSeed(DEFAULT_MAP_SEED);
@@ -247,6 +248,7 @@ const hudSensorState = createHudSensorState(CLIENT_PERF_CONFIG.hudSensorInterval
 const damageFlashState = createDamageFlashState();
 const projVec = new THREE.Vector3();
 const hudLookDir = new THREE.Vector3();
+const audioLookDir = new THREE.Vector3();
 
 const minimapBg = document.createElement('canvas');
 minimapBg.width = 176;
@@ -1002,7 +1004,7 @@ const net = new NetworkManager(scene, {
   onPlayerSlid(data) {
     if (data.playerId !== net.selfId) {
       const dist = Math.hypot(data.x - localPlayer.x, data.z - localPlayer.z);
-      audio.playSlide(dist);
+      audio.playSlide(dist, data);
     }
   },
 
@@ -1011,16 +1013,16 @@ const net = new NetworkManager(scene, {
     invalidateHudSensors(hudSensorState);
     const dist = Math.hypot((data.x || 0) - localPlayer.x, (data.z || 0) - localPlayer.z);
     if (data.destroyed) {
-      audio.playDoorBreak(dist);
+      audio.playDoorBreak(dist, data);
     } else {
-      audio.playDoorToggle(data.isOpen, dist);
+      audio.playDoorToggle(data.isOpen, dist, data);
     }
   },
 
   onWindowBroken(data) {
     world.applyWindowBroken(data, true);
     const dist = Math.hypot((data.x || 0) - localPlayer.x, (data.z || 0) - localPlayer.z);
-    audio.playGlassBreak(dist);
+    audio.playGlassBreak(dist, data);
   },
 
   onLootPicked(data) {
@@ -1052,7 +1054,8 @@ const net = new NetworkManager(scene, {
       data.origin.y - localPlayer.y,
       data.origin.z - localPlayer.z
     );
-    audio.playShot(data.weapon, data.shooterId === net.selfId ? 0 : dist);
+    const isSelf = data.shooterId === net.selfId;
+    audio.playShot(data.weapon, isSelf ? 0 : dist, isSelf ? null : data.origin);
 
     if (data.shooterId === net.selfId && localPlayer.weapons[data.weapon]) {
       localPlayer.weapons[data.weapon].mag = data.mag;
@@ -1093,7 +1096,7 @@ const net = new NetworkManager(scene, {
 
   onWildlifeAggro(data) {
     const dist = Math.hypot(data.x - localPlayer.x, data.z - localPlayer.z);
-    audio.playAnimalAlert(data.species, dist);
+    audio.playAnimalAlert(data.species, dist, data);
     if (data.targetId === net.selfId) {
       const icon = data.species === 'bear' ? '🐻' : '🐆';
       showToast(`${icon} ¡${data.speciesName} enfurecido te persigue!`);
@@ -1102,7 +1105,7 @@ const net = new NetworkManager(scene, {
 
   onWildlifeAttack(data) {
     const dist = Math.hypot(data.x - localPlayer.x, data.z - localPlayer.z);
-    audio.playAnimalAlert(data.species, dist);
+    audio.playAnimalAlert(data.species, dist, data);
   },
 
   onWildlifeKilled(data) {
@@ -1322,6 +1325,13 @@ function renderFrame() {
 
   world.update(dt, elapsed, planeState, stormState, localPlayer);
   localPlayer.update(dt, currentMap, planeState, world, net.getRemoteEntityList());
+  camera.getWorldDirection(audioLookDir);
+  audio.updateListener(
+    camera.position.x,
+    camera.position.y,
+    camera.position.z,
+    Math.atan2(audioLookDir.x, audioLookDir.z)
+  );
   net.sendPlayerState(localPlayer);
   net.updateInterpolation(dt, world, planeState, currentMap);
   updateHUD(dt);

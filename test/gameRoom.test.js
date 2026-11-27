@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { WorldTickDecoder } from '../shared/snapshotCodec.js';
 import { GameRoom } from '../server/gameRoom.js';
 
 function createFakeIo() {
@@ -51,11 +52,20 @@ test('GameRoom: una partida con bots corre sin errores y respeta invariantes', (
     }
   });
 
-  const tick = io.events.findLast((e) => e.name === 'world_tick');
-  assert.ok(tick, 'no se emitió world_tick');
-  assert.ok(tick.data.players['human-1']);
-  assert.ok(Array.isArray(tick.data.wildlife));
-  assert.equal(typeof tick.data.aliveCount, 'number');
+  // El cable va compacto (shared/snapshotCodec.js): se decodifica como lo hace el cliente
+  const decoder = new WorldTickDecoder();
+  let snap = null;
+  let sawWildlife = false;
+  for (const e of io.events) {
+    if (e.name !== 'world_tick') continue;
+    snap = decoder.decode(e.data);
+    if (snap.wildlife) sawWildlife = true;
+  }
+  assert.ok(snap, 'no se emitió world_tick');
+  assert.ok(snap.players['human-1']);
+  assert.equal(snap.players['human-1'].name, 'Tester');
+  assert.ok(sawWildlife, 'la fauna debe enviarse periódicamente');
+  assert.equal(typeof snap.aliveCount, 'number');
 });
 
 test('GameRoom: entrar al lobby limpia y recorta el apodo', () => {

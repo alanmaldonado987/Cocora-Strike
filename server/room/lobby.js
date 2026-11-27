@@ -28,6 +28,7 @@ export const lobbyMethods = {
       p.y = 58;
       p.z = 4;
       this.players.set(socket.id, p);
+      this.tickEncoder?.reset(); // el recién llegado necesita un fotograma clave completo
       socket.emit(S2C.JOINED_MIDGAME, {
         selfId: socket.id,
         seed: this.seed,
@@ -287,6 +288,7 @@ export const lobbyMethods = {
       }
     }
 
+    this.tickEncoder?.reset();
     this.io.emit(S2C.GAME_STARTED, {
       seed: this.seed,
       plane: this.plane,

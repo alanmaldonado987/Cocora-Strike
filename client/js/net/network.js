@@ -14,6 +14,7 @@ import {
 import { createVoxelAvatar } from '../player/avatar.js';
 import { ServerClock, SnapshotBuffer, createSampleOut } from './interpolation.js';
 import { C2S, S2C } from '/shared/protocol.js';
+import { WorldTickDecoder } from '/shared/snapshotCodec.js';
 
 const _sample = createSampleOut();
 
@@ -26,6 +27,8 @@ export class NetworkManager {
 
     this.remotePlayers = new Map();
     this.serverClock = new ServerClock();
+    this.tickDecoder = new WorldTickDecoder();
+    this.lastWorldTick = null; // último snapshot decodificado (útil para depuración y E2E)
     this.lastRenderTime = null;
     this.lastSendTime = 0;
     this._remoteEntityBuffer = [];
@@ -50,6 +53,7 @@ export class NetworkManager {
     });
 
     s.on(S2C.GAME_STARTED, (data) => {
+      this.tickDecoder.seedPlayers(data.players);
       this.clearRemoteAvatars();
       this.syncSnapshotPlayers(data.players || {});
       this.callbacks.onGameStarted?.(data);
@@ -61,7 +65,10 @@ export class NetworkManager {
       this.callbacks.onJoinedMidgame?.(data);
     });
 
-    s.on(S2C.WORLD_TICK, (snapshot) => {
+    s.on(S2C.WORLD_TICK, (raw) => {
+      // Mensaje compacto -> snapshot completo de siempre (ver shared/snapshotCodec.js)
+      const snapshot = this.tickDecoder.decode(raw);
+      this.lastWorldTick = snapshot;
       this.serverClock.observe(snapshot.t, performance.now());
       this.syncSnapshotPlayers(snapshot.players || {}, snapshot.t);
       this.callbacks.onWorldTick?.(snapshot);
@@ -447,8 +454,8 @@ export class NetworkManager {
     if (localPlayer.state !== PLAYER_STATE.PLANE && (!steps || steps.length === 0)) return;
 
     this.socket.emit(C2S.PLAYER_INPUT, {
-      yaw: localPlayer.yaw,
-      pitch: localPlayer.pitch,
+      yaw: Math.round(localPlayer.yaw * 10000) / 10000,
+      pitch: Math.round(localPlayer.pitch * 10000) / 10000,
       steps: steps && steps.length > 0 ? steps : undefined
     });
   }

@@ -10,8 +10,14 @@ import { SIM_DT, stepPlayer, PLAYER_STATE } from '/shared/mapData.js';
 export const predictionMethods = {
   flushPendingNetworkSteps() {
     if (this.pendingNetSteps.length === 0) return null;
-    const out = this.pendingNetSteps.slice(0, 12);
-    this.pendingNetSteps.splice(0, out.length);
+    const n = Math.min(12, this.pendingNetSteps.length);
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const s = this.pendingNetSteps[i];
+      // Solo lo que el servidor valida (server/validation.js): `equipped` no viaja en cada paso
+      out[i] = { seq: s.seq, moveX: s.moveX, moveZ: s.moveZ, yaw: s.yaw, pitch: s.pitch, buttons: s.buttons };
+    }
+    this.pendingNetSteps.splice(0, n);
     return out;
   },
 

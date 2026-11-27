@@ -24,6 +24,7 @@ import {
 } from '../shared/mapData.js';
 import { createWeaponInventory, serializeUnlockedWeapons } from '../shared/weapons.js';
 import { TICK_RATE, TICK_DT } from './room/constants.js';
+import { WorldTickEncoder } from '../shared/snapshotCodec.js';
 import { lobbyMethods } from './room/lobby.js';
 import { interactablesMethods } from './room/interactables.js';
 import { lootMethods } from './room/loot.js';
@@ -62,6 +63,9 @@ export class GameRoom {
 
     this.plane = null;
     this.storm = this.createInitialStorm();
+    // Códec compacto de world_tick (presupuesto de red < 30 KB/s por cliente)
+    this.tickEncoder = new WorldTickEncoder();
+    this._interestBuf = [];
     this.lobbyCountdown = null;
     this.matchStartTime = 0;
     this.stormDamageAccum = 0;
@@ -293,8 +297,16 @@ export class GameRoom {
 
     this.recordPositionHistory(now);
 
-    this.io.emit(S2C.WORLD_TICK, {
+    // Interés de la fauna: posiciones de los humanos (los bots no necesitan recibir snapshots)
+    const interest = this._interestBuf;
+    interest.length = 0;
+    for (const p of this.players.values()) {
+      if (!p.isBot) interest.push(p);
+    }
+
+    this.io.emit(S2C.WORLD_TICK, this.tickEncoder.encode({
       t: now, // hora del servidor (ms): el cliente interpola las entidades remotas con ella
+      interest,
       players: this.serializePlayers(),
       wildlife: this.serializeWildlife(),
       plane: this.plane,
@@ -309,7 +321,7 @@ export class GameRoom {
         dps: this.storm.dps
       },
       aliveCount: this.getAliveCount()
-    });
+    }));
   }
 
   serializePlayers() {

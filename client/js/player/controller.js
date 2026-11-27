@@ -383,12 +383,14 @@ export class LocalPlayerController {
           if (this.keys['ControlLeft'] || this.keys['ControlRight']) buttons |= PLAYER_INPUT_BUTTONS.SLIDE | PLAYER_INPUT_BUTTONS.CROUCH;
           if (this.aimingZoom) buttons |= PLAYER_INPUT_BUTTONS.ADS;
 
+          // Valores redondeados al crear el paso: el cliente predice con exactamente lo que recibe el servidor
+          // y el JSON de subida no arrastra 17 decimales por campo (presupuesto de red)
           const cmd = {
             seq: ++this.inputSeq,
-            moveX: wishX,
-            moveZ: wishZ,
-            yaw: this.yaw,
-            pitch: this.pitch,
+            moveX: Math.round(wishX * 1000) / 1000,
+            moveZ: Math.round(wishZ * 1000) / 1000,
+            yaw: Math.round(this.yaw * 10000) / 10000,
+            pitch: Math.round(this.pitch * 10000) / 10000,
             buttons,
             equipped: this.equipped
           };
